@@ -41,16 +41,16 @@ mySpider :: SpiderDefinition PageType DataItem
 mySpider = SpiderDefinition {
     _name = "test spider"
   , _startUrl = InitialIndex "https://www.metatags.org/all_metatags"
-  , _parse = parse
-  , _pipeline = Just pipeline
-  , _exporters = []
+  , _extract = parse
+  , _transform = Just pipeline
+  , _load = []
 }
 
 main :: IO ()
 main = do
   let startUrl = "http://local.lasvegassun.com"
-      maxDepth = 3
-      numConcurrent = 5
+      maxDepth = 3 :: Integer
+      numConcurrent = 5 :: Integer
       spider = mySpider {_startUrl = InitialIndex startUrl}
   runSpider spider
 
