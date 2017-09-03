@@ -1,52 +1,59 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 module Charlotte (
     SpiderDefinition(..)
   , Result(..)
   , Response
+  , Request
   , runSpider
+  , Request.mkRequest
 ) where
 import           Prelude                    (Bool (..), Either (..), Foldable,
                                              Functor, IO, Maybe (..), Show (..),
-                                             String, Traversable, fmap, filter, flip,
-                                             length, mapM_, not, putStrLn,
-                                             print, replicate, return, sequence, ($),
+                                             String, Traversable, Int, fmap, filter, flip,
+                                             head,
+                                             length, mapM_, not, putStrLn, foldMap, id,
+                                             print, replicate, return, seq, sequence, ($),
+                                             succ, pred, (==), (>),
                                              ($!), (.), (/=), (<$>), (>>))
 
-import           Control.Monad              (when)
+import Data.Foldable as F
+import           Control.Monad              (when, unless)
 import           Data.Either                (isRight, rights)
-import           Data.Maybe (fromJust)
+import           Data.Maybe (fromJust, isNothing)
 --import qualified Data.ByteString.Char8      as BS8
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Data.Semigroup             ((<>))
+import qualified Data.Set                   as S
+import           Data.Typeable              (Typeable)
 import qualified Network.HTTP.Client        as C
 import           Network.HTTP.Client.TLS    (tlsManagerSettings)
+import Network.URI as URI
+import Network.HTTP.Types as NT
 
 import           Control.Concurrent.STM
 import qualified Control.Exception          as E
 import           Control.Monad.IO.Class     (MonadIO, liftIO)
 import           Data.Machine
-import           Data.Machine.Concurrent    (scatter)
+import           Data.Machine.Concurrent    (scatter, (>~>))
 import           Data.Machine.Regulated     (regulated)
 -- import qualified Network.HTTP.Types         as CT
 -- import           Data.Text.Encoding.Error (lenientDecode)
 -- import           Data.Text.Lazy.Encoding  (decodeUtf8With)
--- import qualified Data.Text                as T
+import qualified Data.Text                as T
 -- import           Text.Taggy.Lens          (allNamed, attr, html)
+import Charlotte.Response (Response)
+import Charlotte.Request (Request)
+import qualified Charlotte.Response as Response
+import qualified Charlotte.Request as Request
 
-type Response = C.Response BSL8.ByteString
-
--- makeRequest :: (Functor t, Foldable t, Traversable t) =>
---   C.Manager ->
---   t C.Request ->
---   IO (t Response)
-makeRequest mgr pr = sequence $ flip C.httpLbs mgr <$> pr
 
 data Result a b =
-    Request (a C.Request)
+    Request (a Request)
   | Item  b
 
-instance (Show (a C.Request), Show b) => Show (Result a b) where
+instance (Show (a Request), Show b) => Show (Result a b) where
   show (Request r) = "Result Request (" <> show r <> ")"
   show (Item i)    = "Result " <> show i
 
@@ -55,7 +62,7 @@ resultIsItem (Item _) = True
 resultIsItem _        = False
 resultIsRequest = not . resultIsItem
 
-resultGetRequest :: Result a b -> Maybe (a C.Request)
+resultGetRequest :: Result a b -> Maybe (a Request)
 resultGetRequest (Request r) = Just r
 resultGetRequest _           = Nothing
 
@@ -81,51 +88,71 @@ writeToQ queue n = do
   atomically $ writeTQueue queue n
   return n
 
+type URL = T.Text
+data DownloadTask = DownloadTask
+  { taskUrl   :: !URL
+  , taskDepth :: Int
+  , taskRef   :: !URL
+  } deriving (Show)
+data JobQueue a = JobQueue {-# UNPACK #-} !(TQueue a)
+                           {-# UNPACK #-} !(TVar Int)
+  deriving Typeable
 
--- worker manager r = makeRequest' <$> r
---   where
---     makeRequest' url = do
---       req <- C.parseUrlThrow url
---       let req' = req {C.responseTimeout = C.responseTimeoutMicro 60000000}
---       return $ C.withResponseHistory req' manager $ \hr -> do
---           let orginhost = C.host req
---               finalhost = C.host $ C.hrFinalRequest hr
---               res = C.hrFinalResponse hr
---           when ((/=) orginhost finalhost) $ E.throw $
---             C.InvalidUrlException
---               (show (C.getUri (C.hrFinalRequest hr)))
---               "The response host does not match that of the request's."
---           bss <- C.brConsume $ C.responseBody res
---           return res { C.responseBody = BSL8.fromChunks bss }
+newJobQueueIO :: IO (JobQueue a)
+newJobQueueIO = do
+  queue   <- newTQueueIO
+  active  <- newTVarIO (0 :: Int)
+  return (JobQueue queue active)
 
-      -- case resp of
-      --   Left e  -> "Left String" --Left $ show (e :: C.HttpException)
-      --   Right r -> "Right String" --Right $ BSL8.unpack $ C.responseBody r
+readJobQueue :: JobQueue a -> STM a
+readJobQueue (JobQueue queue _ ) = readTQueue queue
 
---M.filtered isLeft ~> M.mapping (\l->lefts [l]) ~> M.asParts
--- mkDownloader mgr = scatter [autoM (worker mgr), autoM (worker mgr)]
+writeJobQueue :: JobQueue a-> a -> STM ()
+writeJobQueue (JobQueue queue active) a = do
+  writeTQueue queue a
+  modifyTVar' active succ
 
+taskCompleteJobQueue :: JobQueue a -> STM ()
+taskCompleteJobQueue (JobQueue _ active) = modifyTVar' active pred
 
-  -- manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
-    -- ~> filtered isRight
-    -- ~> mapping (\r->rights[r])
-    -- ~> asParts
+isEmptyJobQueue :: JobQueue a -> STM Bool
+isEmptyJobQueue (JobQueue _ active) = do
+  c <- readTVar active
+  return (c==0)
 
+--- Spider/Downloader
+worker :: Traversable t => C.Manager -> t Request -> IO (t (Either String Response))
+worker manager r = sequence $ makeRequest' manager <$> r
 
--- runSpider :: (Functor a, Foldable a, Traversable a, Show b, Show a) =>
---   SpiderDefinition a b ->
---   IO ()
-runSpider :: (Functor f, Traversable f, Show (f C.Request), Show b,
-  Show (f (C.Response BSL8.ByteString))) =>
+makeRequest' :: C.Manager -> Request -> IO (Either String Response)
+makeRequest' manager req = do
+  -- Request.internalRequest
+  let req' = Request.internalRequest req
+  resp <- E.try $ C.withResponseHistory req' manager $ \hr -> do
+      let orginhost = C.host req'
+          finalhost = C.host $ C.hrFinalRequest hr
+          res = C.hrFinalResponse hr
+      when ((/=) orginhost finalhost) $ E.throw $
+        C.InvalidUrlException
+          (show (C.getUri (C.hrFinalRequest hr)))
+          "The response host does not match that of the request's."
+      bss <- C.brConsume $ C.responseBody res
+      return res { C.responseBody = BSL8.fromChunks bss }
+  case resp of
+    Left e -> return $ Left $ show  (e :: C.HttpException)
+    Right r -> return (Right $ Response.mkResponse (Request.uri req) req' r)
+
+runSpider :: (Functor f, Traversable f, Show (f Request), Show b,
+  Show (f Response),
+ (Show (f (Either String Response)))) =>
                           SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
   manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
-  let startReq = C.parseRequest_ <$> _startUrl spiderDef
+  let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
-
+  when (F.any isNothing startReq) (return ())
   dlQ <- newTQueueIO
-  atomically $ writeTQueue dlQ startReq
-
+  atomically $ writeTQueue dlQ (fromJust <$> startReq)
   runT_ $
     construct (queueProducer dlQ)
     ~> autoM (\r -> do
@@ -133,56 +160,54 @@ runSpider spiderDef = do
       print r
       return r
       )
-    ~> autoM (makeRequest manager)
+    -- TODO: dl-middleware-before
+    -- ~> scatter (replicate 3 (autoM (worker manager)))
+    ~> autoM (worker manager)
+    -- left Error -> error_handlers
+    -- right response -> extract
+    ~> autoM (\r -> do
+        putStrLn "Just down from worker"
+        print r
+        return r
+      )
+    ~> filtered (F.any isRight)
+    ~> mapping (\r -> (head . rights . flip(:)[]) <$> r)
+    -- TODO: dl-middleware-after
     ~> auto extract
     ~> asParts
-    ~> filtered resultIsRequest
-    ~> auto (\(Request r)-> r)
-    ~> autoM (writeToQ dlQ)
+    -- ~> filtered resultIsRequest
+    -- ~> auto (\(Request r)-> r)
+    -- ~> autoM (writeToQ dlQ)
     ~> autoM print
     -- ~> autoM transform
     -- ~> autoM load
   return ()
   where
-    handles p a  = \s -> if (p s) then (a s) else s
-    worker manager r = makeRequest' manager <$> r
-    makeRequest' manager url = do
-      req <- C.parseUrlThrow url
-      let req' = req {C.responseTimeout = C.responseTimeoutMicro 60000000}
-      return $ C.withResponseHistory req' manager $ \hr -> do
-          let orginhost = C.host req
-              finalhost = C.host $ C.hrFinalRequest hr
-              res = C.hrFinalResponse hr
-          when ((/=) orginhost finalhost) $ E.throw $
-            C.InvalidUrlException
-              (show (C.getUri (C.hrFinalRequest hr)))
-              "The response host does not match that of the request's."
-          bss <- C.brConsume $ C.responseBody res
-          return res { C.responseBody = BSL8.fromChunks bss }
+    handles p a  s = if p s then a s else s
 
 
-processReq :: (Traversable t, Show b)=>
-  SpiderDefinition t b ->
-  C.Manager ->
-  Result t b ->
-  IO ()
-processReq spiderDef manager req = do
-  let req' = resultGetRequest req
-  case req' of
-    Just r -> do
-      resp <- makeRequest manager r
-      let pipeline' = _transform spiderDef
-          parse' = _extract spiderDef
-          results = parse' resp
-          items = filter resultIsItem results
-          reqs = filter resultIsRequest results
-      putStrLn $ "# of items found: " <> show (length items)
-      case pipeline' of
-        Just p -> do
-          --_ <- p catMaybes $ (mapM resultGetitems items)
-          return ()
-        Nothing -> return ()
-      putStrLn $ "# of request found: " <> show (length reqs)
-      mapM_ (processReq spiderDef manager) reqs
-    Nothing -> putStrLn "No more requests."
-  return ()
+-- processReq :: (Traversable t, Show b)=>
+--   SpiderDefinition t b ->
+--   C.Manager ->
+--   Result t b ->
+--   IO ()
+-- processReq spiderDef manager req = do
+--   let req' = resultGetRequest req
+--   case req' of
+--     Just r -> do
+--       resp <- makeRequest manager r
+--       let pipeline' = _transform spiderDef
+--           parse' = _extract spiderDef
+--           results = parse' resp
+--           items = filter resultIsItem results
+--           reqs = filter resultIsRequest results
+--       putStrLn $ "# of items found: " <> show (length items)
+--       case pipeline' of
+--         Just p -> do
+--           --_ <- p catMaybes $ (mapM resultGetitems items)
+--           return ()
+--         Nothing -> return ()
+--       putStrLn $ "# of request found: " <> show (length reqs)
+--       mapM_ (processReq spiderDef manager) reqs
+--     Nothing -> putStrLn "No more requests."
+--   return ()

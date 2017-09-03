@@ -16,12 +16,16 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Charlotte
+                       Charlotte.Response
+                       Charlotte.Request
   build-depends:       base >= 4.7 && < 5
                      , bytestring
+                     , containers
                      , exceptions
                      , http-client
                      , http-client-tls
                      , http-types
+                     , network-uri
                      , machines
                      , concurrent-machines
                      , stm
@@ -37,9 +41,10 @@ executable charlotte-exe
                      , charlotte
                      , bytestring
                      , containers
+                     , network-uri
                      , lens
-                     , taggy
-                     , taggy-lens
+                     , tagsoup
+                     , tagsoup-selection
                      , text
                      , http-client
   default-language:    Haskell2010
