@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE RankNTypes #-}
 module Charlotte (
     SpiderDefinition(..)
   , Result(..)
@@ -8,6 +9,14 @@ module Charlotte (
   , Request
   , runSpider
   , Request.mkRequest
+  --TODO move to a new home
+  , JobQueue(..)
+  , jobQueueProducer
+  , newJobQueueIO
+  , writeJobQueue
+  , readJobQueue
+  , isEmptyJobQueue
+  , taskCompleteJobQueue
 ) where
 import           Prelude                    (Bool (..), Either (..), Foldable,
                                              Functor, IO, Maybe (..), Show (..),
@@ -18,10 +27,11 @@ import           Prelude                    (Bool (..), Either (..), Foldable,
                                              succ, pred, (==), (>),
                                              ($!), (.), (/=), (<$>), (>>))
 
+import Debug.Trace
 import Data.Foldable as F
 import           Control.Monad              (when, unless)
 import           Data.Either                (isRight, rights)
-import           Data.Maybe (fromJust, isNothing)
+import           Data.Maybe (fromJust, isNothing, fromMaybe, mapMaybe)
 --import qualified Data.ByteString.Char8      as BS8
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Data.Semigroup             ((<>))
@@ -74,7 +84,7 @@ data SpiderDefinition a b = SpiderDefinition {
     _name      :: String
   , _startUrl  :: a String                                   -- source
   , _extract   :: a Response -> [Result a b]               -- extract
-  , _transform :: Maybe ([Result a b] -> IO [Result a b])   -- transform
+  , _transform :: Maybe (b -> IO b)   -- transform
   , _load      :: [[b] -> IO ()]                -- load
 }
 
@@ -94,9 +104,36 @@ data DownloadTask = DownloadTask
   , taskDepth :: Int
   , taskRef   :: !URL
   } deriving (Show)
+
 data JobQueue a = JobQueue {-# UNPACK #-} !(TQueue a)
                            {-# UNPACK #-} !(TVar Int)
   deriving Typeable
+
+
+-- jobQueueProducer :: JobQueue a -> PlanT k a IO ()
+jobQueueProducer :: JobQueue a -> SourceT IO a
+jobQueueProducer q = construct $ go
+  where
+    go = do
+      liftIO $ print ("in go"::String)
+      drained <- liftIO $ atomically $ isEmptyJobQueue q
+      liftIO $ print ("drained is " <> (show drained)::String)
+      when drained stop
+      r <- liftIO $ atomically $ readJobQueue q
+      liftIO $ print ("read a result from queue"::String)
+      yield r
+      liftIO $ print ("yield'd a result from queue"::String)
+      go
+
+
+
+
+    -- yieldNextThing = do
+    --   r <- trace ("yield next thing") liftIO $ atomically $ readJobQueue q
+    --   yield r
+
+
+
 
 newJobQueueIO :: IO (JobQueue a)
 newJobQueueIO = do
@@ -150,31 +187,60 @@ runSpider spiderDef = do
   manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
+      transform = fromMaybe (return) $_transform spiderDef
   when (F.any isNothing startReq) (return ())
-  dlQ <- newTQueueIO
-  atomically $ writeTQueue dlQ (fromJust <$> startReq)
+  dlQ <- newJobQueueIO
+  atomically $ writeJobQueue dlQ (fromJust <$> startReq)
   runT_ $
-    construct (queueProducer dlQ)
+    jobQueueProducer dlQ
     ~> autoM (\r -> do
-      putStrLn "Just down from the Q:"
-      print r
+      putStrLn "Got a request fresh out of the dlQ:"
       return r
       )
+    -- TODO: DOWNLOADER Start
     -- TODO: dl-middleware-before
     -- ~> scatter (replicate 3 (autoM (worker manager)))
     ~> autoM (worker manager)
     -- left Error -> error_handlers
     -- right response -> extract
     ~> autoM (\r -> do
-        putStrLn "Just down from worker"
-        print r
+        putStrLn "Just downloade that request"
+        -- print r
         return r
       )
     ~> filtered (F.any isRight)
     ~> mapping (\r -> (head . rights . flip(:)[]) <$> r)
     -- TODO: dl-middleware-after
-    ~> auto extract
-    ~> asParts
+    -- TODO: DOWNLOADER END.
+    -- ~> mapping extract
+    ~> repeatedly (do
+        resp <- await
+        let results = extract resp
+            reqs = filter resultIsRequest results
+            items = filter resultIsItem results
+        liftIO $ print $ "writing to q " <> show (length reqs) <> " requests."
+        _ <- liftIO $ atomically $ do
+          let reqs' = mapMaybe resultGetRequest reqs
+          mapM_ (writeJobQueue dlQ) reqs'
+        _ <- liftIO $ atomically $ taskCompleteJobQueue dlQ
+        yield $ mapMaybe resultGetItem items
+
+        )
+    -- ~> autoM (\r -> do
+    --     taskCompleteJobQueue dlQ
+    --     return r
+    --  )
+    -- ~> asParts
+    -- ~> construct (do
+    --     r <- await
+    --     when(resultIsItem r) (yield r)
+    --     when(resultIsRequest r) (do
+    --       liftIO $ print "Writing to queue"
+    --       let req = resultGetRequest r
+    --       case req of
+    --         Just r' -> liftIO $ (atomically $ writeJobQueue dlQ r') >> print "wrote to Queue"
+    --         Nothing -> return ())
+    --     )
     -- ~> filtered resultIsRequest
     -- ~> auto (\(Request r)-> r)
     -- ~> autoM (writeToQ dlQ)

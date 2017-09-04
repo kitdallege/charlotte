@@ -1,43 +1,35 @@
-{-# LANGUAGE DeriveFoldable    #-}
-{-# LANGUAGE DeriveFunctor     #-}
-{-# LANGUAGE DeriveTraversable #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, NoImplicitPrelude, DeriveFunctor, DeriveTraversable, DeriveFoldable #-}
 module Main where
-import           Prelude                    (Eq, Foldable, Functor, IO, Integer,
-                                             Ord, Show, String, Traversable,
-                                             map, mapM_, otherwise, print, null, length, filter, flip,
-                                             return, succ, take, ($), (&&), (.), (<), show,
-                                             (/=), (<$>), (<=), (>=), (||), (!!))
-import Debug.Trace
-import qualified Network.HTTP.Client        as C
-import Control.Monad (when, join)
-import Data.Function ((&),)
-import qualified Data.ByteString.Char8      as BS
-import qualified Data.ByteString.Lazy.Char8 as BSL
-import qualified Data.Map.Strict            as Map
-import           Data.Maybe                 (Maybe (..), catMaybes, mapMaybe)
-import Data.Either (Either(..))
-import           Data.Semigroup             ((<>))
+import           Prelude                     (Eq, Foldable, Functor, IO,
+                                              Integer, Ord, Show, String,
+                                              Traversable, filter, map, null,
+                                              print, return, show, succ,
+                                              ($), (.), (<$>), (>=), (==))
+-- import Debug.Trace
+import           Control.Monad               (join)
+import           Data.Function               ((&))
+import qualified Data.ByteString.Lazy.Char8  as BSL
+import           Data.Either                 (Either (..))
+import qualified Data.Map.Strict             as Map
+import           Data.Maybe                  (Maybe (..), catMaybes, mapMaybe)
+import           Data.Semigroup              ((<>))
 -- html handling
-import           Network.URI                as URI
--- import           Control.Lens               (only, (&), (^..))
-import qualified Data.Text                  as T
+import           Network.URI                 as URI
+-- import qualified Data.Text                  as T
 -- import           Data.Text.Encoding.Error   (lenientDecode)
 -- import           Data.Text.Lazy.Encoding    (decodeUtf8With)
--- import           Text.Taggy.Lens            (allNamed, attr, html)
-
-import Text.HTML.TagSoup (parseTags)
-import Text.HTML.TagSoup.Selection as TS
+import           Text.HTML.TagSoup           (parseTags)
+import           Text.HTML.TagSoup.Selection as TS
 
 
 -- Library in the works
 import           Charlotte
-import qualified Charlotte.Response as Response
-import qualified Charlotte.Request as Request
+import qualified Charlotte.Request           as Request
+import qualified Charlotte.Response          as Response
 
 {-
-This program crawls a website and records meta-tags on a given page
+This program crawls a website and records 'internal' links on a page.
+Pages can then be rank'd via the # of other pages linking to them 'PageRank'.
 -}
 type Depth = Integer
 data PageType a = Page Depth a
@@ -62,57 +54,36 @@ main = runSpider siteMapSpider
 parse :: PageType Response -> [ParseResult]
 parse (Page n resp) = do
   let reqs = parseLinks resp
-      results = map (Request . Page (succ n)) reqs
+      nextDepth = succ n
+      results = map (Request . Page nextDepth) reqs
       mkDI l = Map.empty & Map.insert "page" l :: DataItem
   if null results then
     [Item $ mkDI "nothing found!"]
     else
-      -- if n >= 2 then []
-      --   else
-      take 1 results <> map (Item . mkDI . URI.uriPath . Request.uri) reqs
-
-
+      if n >= 3
+        then []
+        else
+          results <> map (Item . mkDI . URI.uriPath . Request.uri) reqs
 
 parseLinks :: Response -> [Request]
 parseLinks resp = let
   Right sel = parseSelector "a"
+  responseUri = Response.uri resp
+  currentHost = URI.uriRegName <$> URI.uriAuthority responseUri
   r = (BSL.unpack $ Response.body resp) :: String
   tags = parseTags r
   tt = filter TS.isTagBranch $ TS.tagTree' tags
   links = mapMaybe (TS.findTagBranchAttr "href" . TS.content) $ join $ TS.select sel <$> tt
-  relLinks = filter URI.isRelativeReference links
-  relLinks' = mapMaybe URI.parseRelativeReference relLinks
-  responseUri = (Response.uri resp)
-  relLinks'' = map (`URI.relativeTo` responseUri) relLinks'
-  relLinks''' = map show relLinks''
-  -- relLinks' = map show relLinks
-  in catMaybes $ Request.mkRequest <$> relLinks'''
+  relLinks = map (show . (`URI.relativeTo` responseUri)) $
+    mapMaybe URI.parseRelativeReference $
+    filter URI.isRelativeReference links
+  absLinks = map show $
+    filter (\l->(==currentHost) $ URI.uriRegName <$> URI.uriAuthority l) $
+    mapMaybe URI.parseAbsoluteURI $
+    filter URI.isAbsoluteURI links
+  in catMaybes $ Request.mkRequest <$> (absLinks <> relLinks)
 
-{-
-parseLinks :: C.Response BSL.ByteString -> [C.Request]
-parseLinks r = let
-  body = decodeUtf8With lenientDecode $ C.responseBody r
-  links = body ^.. html . allNamed (only "a") . attr "href" & catMaybes
-  links' = filterLinks (T.pack "http://local.lasvegassun.com") links
-  links'' = map mkAbs links'
-  in C.parseRequest_ . T.unpack <$> links''
-
-mkAbs :: T.Text -> T.Text
-mkAbs p
-  | "http://local.lasvegassun.com" `T.isPrefixOf` p = p
-  | "//" `T.isPrefixOf` p = "http:" <> p
-  | otherwise = "http://local.lasvegassun.com" <> p
-
-
-filterLinks :: T.Text -> [T.Text] -> [T.Text]
-filterLinks host' lnks' = [l | l <- lnks', isAbsolute host' l || isProtoRelative host' l || isRelative l ]
-  where
-    isRelative l =  "/" `T.isPrefixOf` l && (T.length l  <= 1 || (/=) '/' (T.index l 1))
-    isAbsolute h l = ("http://" <> h) `T.isPrefixOf` l
-    isProtoRelative h l = "//" `T.isPrefixOf` l && ("//" <> h) `T.isPrefixOf` l
-
--}
-pipeline :: [Result PageType DataItem] -> IO [Result PageType DataItem]
-pipeline xs = do
-  mapM_ print xs
-  return xs
+pipeline :: DataItem -> IO DataItem
+pipeline x = do
+  print x
+  return x
