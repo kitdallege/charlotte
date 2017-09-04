@@ -60,8 +60,8 @@ parse (Page n resp) = do
   if null results then
     [Item $ mkDI "nothing found!"]
     else
-      if n >= 3
-        then []
+      if n >= 1
+        then [Item (mkDI (show $ Response.uri $ resp) & Map.insert "max-depth" "true")]
         else
           results <> map (Item . mkDI . URI.uriPath . Request.uri) reqs
 

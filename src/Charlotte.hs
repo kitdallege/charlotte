@@ -29,11 +29,11 @@ import           Prelude                    (Bool (..), Either (..), Foldable,
 
 import Debug.Trace
 import Data.Foldable as F
-import           Control.Monad              (when, unless, mapM)
-import           Data.Either                (isRight, rights)
+import           Control.Monad              (when, unless, mapM, forever, replicateM_, void)
+import           Data.Either                (isLeft, isRight, rights)
 import           Data.Maybe (fromJust, isNothing, fromMaybe, mapMaybe)
 import Control.Category (Category)
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, forkIO)
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Data.Semigroup             ((<>))
 import qualified Data.Set                   as S
@@ -159,6 +159,14 @@ isEmptyJobQueue (JobQueue _ active) = do
 mkWorker :: (Traversable t, Category k) => C.Manager -> MachineT IO (k (t Request)) (t (Either String Response))
 mkWorker manager = autoM $ worker manager
 
+workerWrapper :: Traversable t => C.Manager -> TQueue (t Request) -> TQueue (t (Either String Response)) -> IO ()
+workerWrapper manager inBox outBox = forever $ do
+  -- TODO: reduce to a single atomically block
+  req <- atomically $ readTQueue inBox
+  resp <- sequence $ makeRequest' manager <$> req
+  atomically $ writeTQueue outBox resp
+  return ()
+
 worker :: Traversable t => C.Manager -> t Request -> IO (t (Either String Response))
 worker manager r = sequence $ makeRequest' manager <$> r
 
@@ -187,15 +195,21 @@ runSpider :: (Functor f, Traversable f, Show (f Request), Show b,
  (Show (f (Either String Response)))) =>
                           SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
-  manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
       transform = fromMaybe return $_transform spiderDef
+      -- load = _load spiderDef
+  -- bail if there is nothing to do.
   when (F.any isNothing startReq) (return ())
+  -- make downloader queue and populate it with the first item.
   dlQ <- newJobQueueIO
   atomically $ writeJobQueue dlQ (fromJust <$> startReq)
-
-
+  -- Spin up the downloader worker threads
+  workerInBox <- newTQueueIO   :: IO (TQueue (f Request))
+  workerOutBox <- newTQueueIO  :: IO (TQueue (f (Either String Response)))
+  manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
+  replicateM_ 2 . forkIO $ workerWrapper manager workerInBox workerOutBox
+  -- and, 'Welcome to the Machines'
   runT_ $
     jobQueueProducer dlQ
     ~> autoM (\r -> do
@@ -206,13 +220,29 @@ runSpider spiderDef = do
     -- TODO: dl-middleware-before
     -- ~> scatter [mWorker (worker manager)]
     -- ~> autoM (worker manager)
-    ~> mkWorker manager
+    -- ~> mkWorker manager
+    ~> regulated 0.2
+    ~> autoM (\r->do
+        liftIO $ atomically $ writeTQueue workerInBox r
+        liftIO $ atomically $ readTQueue workerOutBox
+      )
     -- left Error -> error_handlers
     -- right response -> extract
     ~> autoM (\r -> do
         putStrLn "Just downloaded that request"
         -- print r
         return r
+      )
+    -- TODO: handles lefts with a taskCompleteJobQueue dlq
+    ~> repeatedly (do
+        r <- await
+        if  F.any isLeft r then
+          (liftIO $ do
+             print r
+             atomically $ taskCompleteJobQueue dlQ
+            )
+          else
+            yield r
       )
     ~> filtered (F.any isRight)
     ~> mapping (\r -> (head . rights . flip(:)[]) <$> r)
@@ -235,32 +265,3 @@ runSpider spiderDef = do
     ~> autoM (mapM transform)
     -- ~> autoM load
   return ()
-  -- where
-  --   handles p a  s = if p s then a s else s
-
-
--- processReq :: (Traversable t, Show b)=>
---   SpiderDefinition t b ->
---   C.Manager ->
---   Result t b ->
---   IO ()
--- processReq spiderDef manager req = do
---   let req' = resultGetRequest req
---   case req' of
---     Just r -> do
---       resp <- makeRequest manager r
---       let pipeline' = _transform spiderDef
---           parse' = _extract spiderDef
---           results = parse' resp
---           items = filter resultIsItem results
---           reqs = filter resultIsRequest results
---       putStrLn $ "# of items found: " <> show (length items)
---       case pipeline' of
---         Just p -> do
---           --_ <- p catMaybes $ (mapM resultGetitems items)
---           return ()
---         Nothing -> return ()
---       putStrLn $ "# of request found: " <> show (length reqs)
---       mapM_ (processReq spiderDef manager) reqs
---     Nothing -> putStrLn "No more requests."
---   return ()
