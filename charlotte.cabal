@@ -19,6 +19,7 @@ library
                        Charlotte.Response
                        Charlotte.Request
   build-depends:       base >= 4.7 && < 5
+                     , async
                      , bytestring
                      , containers
                      , exceptions

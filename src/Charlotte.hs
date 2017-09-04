@@ -29,10 +29,11 @@ import           Prelude                    (Bool (..), Either (..), Foldable,
 
 import Debug.Trace
 import Data.Foldable as F
-import           Control.Monad              (when, unless)
+import           Control.Monad              (when, unless, mapM)
 import           Data.Either                (isRight, rights)
 import           Data.Maybe (fromJust, isNothing, fromMaybe, mapMaybe)
---import qualified Data.ByteString.Char8      as BS8
+import Control.Category (Category)
+import Control.Concurrent (threadDelay)
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Data.Semigroup             ((<>))
 import qualified Data.Set                   as S
@@ -47,6 +48,7 @@ import qualified Control.Exception          as E
 import           Control.Monad.IO.Class     (MonadIO, liftIO)
 import           Data.Machine
 import           Data.Machine.Concurrent    (scatter, (>~>))
+import Control.Concurrent.Async (async, wait)
 import           Data.Machine.Regulated     (regulated)
 -- import qualified Network.HTTP.Types         as CT
 -- import           Data.Text.Encoding.Error (lenientDecode)
@@ -112,17 +114,13 @@ data JobQueue a = JobQueue {-# UNPACK #-} !(TQueue a)
 
 -- jobQueueProducer :: JobQueue a -> PlanT k a IO ()
 jobQueueProducer :: JobQueue a -> SourceT IO a
-jobQueueProducer q = construct $ go
+jobQueueProducer q = construct go
   where
     go = do
-      liftIO $ print ("in go"::String)
       drained <- liftIO $ atomically $ isEmptyJobQueue q
-      liftIO $ print ("drained is " <> (show drained)::String)
       when drained stop
       r <- liftIO $ atomically $ readJobQueue q
-      liftIO $ print ("read a result from queue"::String)
       yield r
-      liftIO $ print ("yield'd a result from queue"::String)
       go
 
 
@@ -157,15 +155,20 @@ isEmptyJobQueue (JobQueue _ active) = do
   c <- readTVar active
   return (c==0)
 
---- Spider/Downloader
+
+mkWorker :: (Traversable t, Category k) => C.Manager -> MachineT IO (k (t Request)) (t (Either String Response))
+mkWorker manager = autoM $ worker manager
+
 worker :: Traversable t => C.Manager -> t Request -> IO (t (Either String Response))
 worker manager r = sequence $ makeRequest' manager <$> r
 
 makeRequest' :: C.Manager -> Request -> IO (Either String Response)
 makeRequest' manager req = do
-  -- Request.internalRequest
+  threadDelay 200000
   let req' = Request.internalRequest req
+  liftIO $ print ("making request"::String)
   resp <- E.try $ C.withResponseHistory req' manager $ \hr -> do
+      liftIO $ print ("made request"::String)
       let orginhost = C.host req'
           finalhost = C.host $ C.hrFinalRequest hr
           res = C.hrFinalResponse hr
@@ -187,10 +190,12 @@ runSpider spiderDef = do
   manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
-      transform = fromMaybe (return) $_transform spiderDef
+      transform = fromMaybe return $_transform spiderDef
   when (F.any isNothing startReq) (return ())
   dlQ <- newJobQueueIO
   atomically $ writeJobQueue dlQ (fromJust <$> startReq)
+
+
   runT_ $
     jobQueueProducer dlQ
     ~> autoM (\r -> do
@@ -199,12 +204,13 @@ runSpider spiderDef = do
       )
     -- TODO: DOWNLOADER Start
     -- TODO: dl-middleware-before
-    -- ~> scatter (replicate 3 (autoM (worker manager)))
-    ~> autoM (worker manager)
+    -- ~> scatter [mWorker (worker manager)]
+    -- ~> autoM (worker manager)
+    ~> mkWorker manager
     -- left Error -> error_handlers
     -- right response -> extract
     ~> autoM (\r -> do
-        putStrLn "Just downloade that request"
+        putStrLn "Just downloaded that request"
         -- print r
         return r
       )
@@ -212,7 +218,7 @@ runSpider spiderDef = do
     ~> mapping (\r -> (head . rights . flip(:)[]) <$> r)
     -- TODO: dl-middleware-after
     -- TODO: DOWNLOADER END.
-    -- ~> mapping extract
+    -- Extractor start
     ~> repeatedly (do
         resp <- await
         let results = extract resp
@@ -224,32 +230,13 @@ runSpider spiderDef = do
           mapM_ (writeJobQueue dlQ) reqs'
         _ <- liftIO $ atomically $ taskCompleteJobQueue dlQ
         yield $ mapMaybe resultGetItem items
-
         )
-    -- ~> autoM (\r -> do
-    --     taskCompleteJobQueue dlQ
-    --     return r
-    --  )
-    -- ~> asParts
-    -- ~> construct (do
-    --     r <- await
-    --     when(resultIsItem r) (yield r)
-    --     when(resultIsRequest r) (do
-    --       liftIO $ print "Writing to queue"
-    --       let req = resultGetRequest r
-    --       case req of
-    --         Just r' -> liftIO $ (atomically $ writeJobQueue dlQ r') >> print "wrote to Queue"
-    --         Nothing -> return ())
-    --     )
-    -- ~> filtered resultIsRequest
-    -- ~> auto (\(Request r)-> r)
-    -- ~> autoM (writeToQ dlQ)
-    ~> autoM print
-    -- ~> autoM transform
+    -- Extractor end
+    ~> autoM (mapM transform)
     -- ~> autoM load
   return ()
-  where
-    handles p a  s = if p s then a s else s
+  -- where
+  --   handles p a  s = if p s then a s else s
 
 
 -- processReq :: (Traversable t, Show b)=>
