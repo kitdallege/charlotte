@@ -18,6 +18,7 @@ library
   exposed-modules:     Charlotte
                        Charlotte.Response
                        Charlotte.Request
+                       Charlotte.Types
   build-depends:       base >= 4.7 && < 5
                      , async
                      , bytestring
@@ -37,9 +38,10 @@ library
 executable charlotte-exe
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N -O2
   build-depends:       base
                      , charlotte
+                     , aeson
                      , bytestring
                      , containers
                      , network-uri

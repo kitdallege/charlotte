@@ -21,8 +21,8 @@ module Charlotte (
 import           Prelude                    (Bool (..), Either (..), Foldable,
                                              Functor, IO, Maybe (..), Show (..),
                                              String, Traversable, Int, fmap, filter, flip,
-                                             head,
-                                             length, mapM_, not, putStrLn, foldMap, id,
+                                             head, const,
+                                             length, mapM_, not, putStr, putStrLn, foldMap, id,
                                              print, replicate, return, seq, sequence, ($),
                                              succ, pred, (==), (>),
                                              ($!), (.), (/=), (<$>), (>>))
@@ -40,7 +40,7 @@ import qualified Data.Set                   as S
 import           Data.Typeable              (Typeable)
 import qualified Network.HTTP.Client        as C
 import           Network.HTTP.Client.TLS    (tlsManagerSettings)
-import Network.URI as URI
+import qualified Network.URI as URI
 import Network.HTTP.Types as NT
 
 import           Control.Concurrent.STM
@@ -87,26 +87,10 @@ data SpiderDefinition a b = SpiderDefinition {
   , _startUrl  :: a String                                   -- source
   , _extract   :: a Response -> [Result a b]               -- extract
   , _transform :: Maybe (b -> IO b)   -- transform
-  , _load      :: [[b] -> IO ()]                -- load
+  , _load      :: Maybe (b -> IO ())                -- load
 }
 
 ------ new stuff -----------
-
-queueProducer :: TQueue a -> PlanT k a IO ()
-queueProducer q = exhaust $ atomically $ tryReadTQueue q
-
-writeToQ :: TQueue b -> b -> IO b
-writeToQ queue n = do
-  atomically $ writeTQueue queue n
-  return n
-
-type URL = T.Text
-data DownloadTask = DownloadTask
-  { taskUrl   :: !URL
-  , taskDepth :: Int
-  , taskRef   :: !URL
-  } deriving (Show)
-
 data JobQueue a = JobQueue {-# UNPACK #-} !(TQueue a)
                            {-# UNPACK #-} !(TVar Int)
   deriving Typeable
@@ -117,8 +101,8 @@ jobQueueProducer :: JobQueue a -> SourceT IO a
 jobQueueProducer q = construct go
   where
     go = do
-      drained <- liftIO $ atomically $ isEmptyJobQueue q
-      when drained stop
+      active <- liftIO $ atomically $ isActiveJobQueue q
+      unless active stop
       r <- liftIO $ atomically $ readJobQueue q
       yield r
       go
@@ -151,32 +135,40 @@ taskCompleteJobQueue :: JobQueue a -> STM ()
 taskCompleteJobQueue (JobQueue _ active) = modifyTVar' active pred
 
 isEmptyJobQueue :: JobQueue a -> STM Bool
-isEmptyJobQueue (JobQueue _ active) = do
+isEmptyJobQueue (JobQueue queue _) = isEmptyTQueue queue
+
+isActiveJobQueue :: JobQueue a -> STM Bool
+isActiveJobQueue (JobQueue _ active) = do
   c <- readTVar active
-  return (c==0)
+  return (c /= 0)
 
+jobQueueActiveCount :: JobQueue a -> STM Int
+jobQueueActiveCount (JobQueue _ active) = readTVar active
 
-mkWorker :: (Traversable t, Category k) => C.Manager -> MachineT IO (k (t Request)) (t (Either String Response))
-mkWorker manager = autoM $ worker manager
+-- mkWorker :: (Traversable t, Category k) => C.Manager -> MachineT IO (k (t Request)) (t (Either String Response))
+-- mkWorker manager = autoM $ worker manager
+--   where
+--     worker :: Traversable t => C.Manager -> t Request -> IO (t (Either String Response))
+--     worker manager r = sequence $ makeRequest' manager <$> r
 
 workerWrapper :: Traversable t => C.Manager -> TQueue (t Request) -> TQueue (t (Either String Response)) -> IO ()
 workerWrapper manager inBox outBox = forever $ do
   -- TODO: reduce to a single atomically block
   req <- atomically $ readTQueue inBox
+  -- liftIO $ print $ "read req from inbox & performing now"
   resp <- sequence $ makeRequest' manager <$> req
+  -- liftIO $ print $ "writing response to outBox"
   atomically $ writeTQueue outBox resp
   return ()
 
-worker :: Traversable t => C.Manager -> t Request -> IO (t (Either String Response))
-worker manager r = sequence $ makeRequest' manager <$> r
+
 
 makeRequest' :: C.Manager -> Request -> IO (Either String Response)
 makeRequest' manager req = do
-  threadDelay 200000
   let req' = Request.internalRequest req
-  liftIO $ print ("making request"::String)
+  -- liftIO $ print $ "making request: " <> (show $ Request.uri req)
   resp <- E.try $ C.withResponseHistory req' manager $ \hr -> do
-      liftIO $ print ("made request"::String)
+      liftIO $ print $ "Requested: " <> (show $ Request.uri req)
       let orginhost = C.host req'
           finalhost = C.host $ C.hrFinalRequest hr
           res = C.hrFinalResponse hr
@@ -188,7 +180,7 @@ makeRequest' manager req = do
       return res { C.responseBody = BSL8.fromChunks bss }
   case resp of
     Left e -> return $ Left $ show  (e :: C.HttpException)
-    Right r -> return (Right $ Response.mkResponse (Request.uri req) req' r)
+    Right r -> return (Right $ Response.mkResponse (Request.uri req) req r)
 
 runSpider :: (Functor f, Traversable f, Show (f Request), Show b,
   Show (f Response),
@@ -198,49 +190,37 @@ runSpider spiderDef = do
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
       transform = fromMaybe return $_transform spiderDef
-      -- load = _load spiderDef
+      load = fromMaybe (const (return ())) $ _load spiderDef
   -- bail if there is nothing to do.
   when (F.any isNothing startReq) (return ())
   -- make downloader queue and populate it with the first item.
   dlQ <- newJobQueueIO
   atomically $ writeJobQueue dlQ (fromJust <$> startReq)
+  -- use a set to record/filter seen requests so we don't dl something > 1
+  seen    <- newTVarIO (S.empty :: S.Set String)
   -- Spin up the downloader worker threads
   workerInBox <- newTQueueIO   :: IO (TQueue (f Request))
   workerOutBox <- newTQueueIO  :: IO (TQueue (f (Either String Response)))
   manager <- C.newManager tlsManagerSettings {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
-  replicateM_ 2 . forkIO $ workerWrapper manager workerInBox workerOutBox
+  replicateM_ 5 . forkIO $ workerWrapper manager workerInBox workerOutBox
+
   -- and, 'Welcome to the Machines'
   runT_ $
     jobQueueProducer dlQ
-    ~> autoM (\r -> do
-      putStrLn "Got a request fresh out of the dlQ:"
-      return r
-      )
+    -- ~> autoM (\r -> do;putStrLn "Got a request fresh out of the dlQ:";return r)
     -- TODO: DOWNLOADER Start
     -- TODO: dl-middleware-before
-    -- ~> scatter [mWorker (worker manager)]
-    -- ~> autoM (worker manager)
-    -- ~> mkWorker manager
-    ~> regulated 0.2
-    ~> autoM (\r->do
-        liftIO $ atomically $ writeTQueue workerInBox r
-        liftIO $ atomically $ readTQueue workerOutBox
-      )
-    -- left Error -> error_handlers
-    -- right response -> extract
-    ~> autoM (\r -> do
-        putStrLn "Just downloaded that request"
-        -- print r
-        return r
-      )
+    ~> repeatedly (filterDuplicates seen)
+    -- ~> regulated 0.05
+    ~> schedular workerInBox workerOutBox dlQ
+    -- ~> autoM (\r -> do;putStrLn "Just downloaded that request";return r)
     -- TODO: handles lefts with a taskCompleteJobQueue dlq
     ~> repeatedly (do
         r <- await
         if  F.any isLeft r then
-          (liftIO $ do
+          liftIO $ do
              print r
              atomically $ taskCompleteJobQueue dlQ
-            )
           else
             yield r
       )
@@ -248,20 +228,73 @@ runSpider spiderDef = do
     ~> mapping (\r -> (head . rights . flip(:)[]) <$> r)
     -- TODO: dl-middleware-after
     -- TODO: DOWNLOADER END.
-    -- Extractor start
-    ~> repeatedly (do
-        resp <- await
-        let results = extract resp
-            reqs = filter resultIsRequest results
-            items = filter resultIsItem results
-        liftIO $ print $ "writing to q " <> show (length reqs) <> " requests."
-        _ <- liftIO $ atomically $ do
-          let reqs' = mapMaybe resultGetRequest reqs
-          mapM_ (writeJobQueue dlQ) reqs'
-        _ <- liftIO $ atomically $ taskCompleteJobQueue dlQ
-        yield $ mapMaybe resultGetItem items
-        )
-    -- Extractor end
+    -- Extractor
+    ~> extractor dlQ extract
     ~> autoM (mapM transform)
-    -- ~> autoM load
+    ~> asParts
+    ~> autoM load
   return ()
+    where
+      extractor dlQ f = repeatedly (do
+          resp <- await
+          let results = f resp
+              reqs = filter resultIsRequest results
+              items = filter resultIsItem results
+          -- liftIO $ print $ "writing to q " <> show (length reqs) <> " requests."
+          _ <- liftIO $ atomically $ do
+            let reqs' = mapMaybe resultGetRequest reqs
+            mapM_ (writeJobQueue dlQ) reqs'
+          _ <- liftIO $ atomically $ taskCompleteJobQueue dlQ
+          yield $ mapMaybe resultGetItem items
+          )
+      filterDuplicates seen = do
+        liftIO $ threadDelay 10
+        req <- await
+        s <- liftIO $ atomically $ readTVar seen
+        let req' = head $ F.toList req
+            path = URI.uriPath $ Request.uri req'
+            duplicate = S.member path s
+        unless duplicate $ do
+          let s' = S.insert path s
+          liftIO $ atomically $ writeTVar seen s'
+          yield req
+      schedular ib ob dlQ = construct go
+        where
+          drainOutBound ob' cnt = do
+            drained <- liftIO $ atomically $ isEmptyTQueue ob'
+            -- when drained (do;liftIO $ print $ "drainOutBound drained!")
+            unless drained (do
+              r <- liftIO $ atomically $ readTQueue ob'
+              yield r
+              -- liftIO $ print $ "drainging out bound: " <> show cnt
+              drainOutBound ob' (succ cnt)
+              )
+
+          go = do
+            liftIO $ threadDelay 1
+            jqDrained <- liftIO $ atomically $ isEmptyJobQueue dlQ
+            -- when jqDrained (do;liftIO $ print "jqDrained")
+            unless jqDrained  (do
+              -- liftIO $ print $ "schedular awaits data"
+              x <- await
+              -- liftIO $ print $ "data aquired writing to worker inbox"
+              liftIO $ atomically $ writeTQueue ib x
+              -- liftIO $ print $ "data wrote to worker inbox"
+              )
+            outBoundDrained <- liftIO $ atomically $ isEmptyTQueue ob
+            liftIO $ threadDelay 1
+            -- when outBoundDrained (do;liftIO $ print "outBoundDrained")
+            unless outBoundDrained (do
+              -- liftIO $ print $ "schedular yields data"
+              drainOutBound ob (1::Int)
+              -- liftIO $ print $ "schedular yielded data"
+              )
+            -- liftIO $ putStr $ ".s."
+            active <- liftIO $ atomically $ isActiveJobQueue dlQ
+            -- activeCount <- liftIO $ atomically $ jobQueueActiveCount dlQ
+            -- liftIO $ print $ "jobQueueActiveCount: " <> show activeCount
+            when (not active) (do
+              -- liftIO $ print $ "STOPPING SCHEDULAR (JobQueue is inActive)."
+              stop
+              )
+            go

@@ -9,30 +9,25 @@ module Charlotte.Response (
   -- computed
   , statusCode
   , body
-  , Meta
-  , Flag
 ) where
 import qualified Data.ByteString.Lazy.Char8 as BSL8
-import           Data.Dynamic               (Dynamic)
-import           Data.Map.Strict            (Map)
 import qualified Data.Map.Strict            as Map
 import qualified Network.HTTP.Client        as C
 import qualified Network.HTTP.Types         as NT
 import           Network.URI                as URI
 
-type Meta = Map String Dynamic
-type Flag = String
-
+import           Charlotte.Types  (Flag, Meta)
+import Charlotte.Request (Request)
 
 data Response = Response {
     uri              :: URI.URI
-  , request          :: C.Request -- Charlotte.Request ?
+  , request          :: Request -- Charlotte.Request ?
   , originalResponse :: C.Response BSL8.ByteString
   , meta             :: Meta
   , flags            :: [Flag]
 } deriving (Show)
 
-mkResponse :: URI -> C.Request -> C.Response BSL8.ByteString -> Response
+mkResponse :: URI -> Request -> C.Response BSL8.ByteString -> Response
 mkResponse uri' req resp = Response {
     uri = uri'
   , request = req

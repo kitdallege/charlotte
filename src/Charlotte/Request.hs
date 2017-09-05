@@ -12,7 +12,7 @@ import qualified Network.HTTP.Client as C
 import           Network.URI         as URI
 -- import Network.HTTP.Types as NT
 
-import           Charlotte.Response  (Flag, Meta)
+import           Charlotte.Types  (Flag, Meta)
 
 data Request = Request {
     uri             :: URI.URI

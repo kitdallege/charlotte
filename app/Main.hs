@@ -1,27 +1,32 @@
-{-# LANGUAGE OverloadedStrings, NoImplicitPrelude, DeriveFunctor, DeriveTraversable, DeriveFoldable #-}
+{-# LANGUAGE DeriveFoldable    #-}
+{-# LANGUAGE DeriveFunctor     #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
-import           Prelude                     (Eq, Foldable, Functor, IO,
-                                              Integer, Ord, Show, String,
-                                              Traversable, filter, map, null,
-                                              print, return, show, succ,
-                                              ($), (.), (<$>), (>=), (==))
+import           Prelude                     (Eq, Foldable, Functor, IO, Int,
+                                              Ord, Show, String, Traversable,
+                                              filter, map, null, print, return,
+                                              show, succ, ($), (.), (<$>), (==),
+                                              (>=))
 -- import Debug.Trace
 import           Control.Monad               (join)
-import           Data.Function               ((&))
 import qualified Data.ByteString.Lazy.Char8  as BSL
 import           Data.Either                 (Either (..))
 import qualified Data.Map.Strict             as Map
 import           Data.Maybe                  (Maybe (..), catMaybes, mapMaybe)
 import           Data.Semigroup              ((<>))
+import           GHC.Generics                (Generic)
+import           System.IO                   (BufferMode (..), Handle,
+                                              IOMode (..), hSetBuffering,
+                                              stdout, withFile)
 -- html handling
 import           Network.URI                 as URI
--- import qualified Data.Text                  as T
--- import           Data.Text.Encoding.Error   (lenientDecode)
--- import           Data.Text.Lazy.Encoding    (decodeUtf8With)
 import           Text.HTML.TagSoup           (parseTags)
 import           Text.HTML.TagSoup.Selection as TS
-
-
+-- Export as Json
+import           Data.Aeson                  (ToJSON, encode)
 -- Library in the works
 import           Charlotte
 import qualified Charlotte.Request           as Request
@@ -31,59 +36,80 @@ import qualified Charlotte.Response          as Response
 This program crawls a website and records 'internal' links on a page.
 Pages can then be rank'd via the # of other pages linking to them 'PageRank'.
 -}
-type Depth = Integer
+type Depth = Int
 data PageType a = Page Depth a
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 type DataItem = Map.Map String String
-type ParseResult = Result PageType DataItem
+data PageData = PageData {
+    pagePath  :: String
+  , pageLinks :: [String]
+  , pageDepth :: Int
+} deriving (Show, Generic)
 
-siteMapSpider :: SpiderDefinition PageType DataItem
+instance ToJSON PageData
+type ParseResult = Result PageType PageData
+
+siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
   , _startUrl = Page 0 "http://local.lasvegassun.com/"
   , _extract = parse
-  , _transform = Just pipeline
-  , _load = []
+  , _transform = Nothing -- Just pipeline
+  , _load = Nothing
 }
 
+maxDepth :: Int
+maxDepth = 2
+
 main :: IO ()
-main = runSpider siteMapSpider
+main = do
+  hSetBuffering stdout LineBuffering
+  print $ "Running " <> _name siteMapSpider
+  withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
+    hSetBuffering hdl LineBuffering
+    runSpider siteMapSpider {_load = Just (load hdl)}
+    )
+  print $ "Finished Running " <> _name siteMapSpider
 
 -- parse :: Process (PageType Response) ParseResult
 parse :: PageType Response -> [ParseResult]
-parse (Page n resp) = do
-  let reqs = parseLinks resp
-      nextDepth = succ n
+parse (Page depth resp) = do
+  let nextDepth = succ depth
+      links = parseLinks resp
+      linkPaths = map URI.uriPath links
+      responsePath = URI.uriPath $ Response.uri resp
+      reqs = catMaybes $ Request.mkRequest <$> map show links
       results = map (Request . Page nextDepth) reqs
-      mkDI l = Map.empty & Map.insert "page" l :: DataItem
   if null results then
-    [Item $ mkDI "nothing found!"]
+    [Item $ PageData "nothing found!" [] depth]
     else
-      if n >= 1
-        then [Item (mkDI (show $ Response.uri $ resp) & Map.insert "max-depth" "true")]
+      if depth >= maxDepth
+        then [Item $ PageData responsePath linkPaths depth]
         else
-          results <> map (Item . mkDI . URI.uriPath . Request.uri) reqs
+          results <> [Item $ PageData responsePath linkPaths depth]
 
-parseLinks :: Response -> [Request]
+parseLinks :: Response -> [URI]
 parseLinks resp = let
   Right sel = parseSelector "a"
-  responseUri = Response.uri resp
+  responseUri = Request.uri $ Response.request resp
   currentHost = URI.uriRegName <$> URI.uriAuthority responseUri
   r = (BSL.unpack $ Response.body resp) :: String
   tags = parseTags r
   tt = filter TS.isTagBranch $ TS.tagTree' tags
   links = mapMaybe (TS.findTagBranchAttr "href" . TS.content) $ join $ TS.select sel <$> tt
-  relLinks = map (show . (`URI.relativeTo` responseUri)) $
+  relLinks = map (`URI.relativeTo` responseUri) $
     mapMaybe URI.parseRelativeReference $
     filter URI.isRelativeReference links
-  absLinks = map show $
-    filter (\l->(==currentHost) $ URI.uriRegName <$> URI.uriAuthority l) $
+  absLinks = filter (\l->(==currentHost) $ URI.uriRegName <$> URI.uriAuthority l) $
     mapMaybe URI.parseAbsoluteURI $
     filter URI.isAbsoluteURI links
-  in catMaybes $ Request.mkRequest <$> (absLinks <> relLinks)
+  in (absLinks <> relLinks)
 
-pipeline :: DataItem -> IO DataItem
+pipeline :: PageData -> IO PageData
 pipeline x = do
   print x
   return x
+
+load :: ToJSON a => Handle -> a -> IO ()
+load fh item = BSL.hPutStrLn fh (encode item)
