@@ -45,11 +45,9 @@ executable charlotte-exe
                      , bytestring
                      , containers
                      , network-uri
-                     , lens
+                     , sqlite-simple
                      , tagsoup
                      , tagsoup-selection
-                     , text
-                     , http-client
   default-language:    Haskell2010
 
 test-suite charlotte-test

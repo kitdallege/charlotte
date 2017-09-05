@@ -9,7 +9,7 @@ import           Prelude                     (Eq, Foldable, Functor, IO, Int,
                                               Ord, Show, String, Traversable,
                                               filter, map, null, print, return,
                                               show, succ, ($), (.), (<$>), (==),
-                                              (>=))
+                                              (>=), mapM_, length)
 -- import Debug.Trace
 import           Control.Monad               (join)
 import qualified Data.ByteString.Lazy.Char8  as BSL
@@ -22,11 +22,13 @@ import           System.IO                   (BufferMode (..), Handle,
                                               IOMode (..), hSetBuffering,
                                               stdout, withFile)
 -- html handling
-import           Network.URI                 as URI
+import           Network.URI                 (URI(..))
+import qualified Network.URI                 as URI
 import           Text.HTML.TagSoup           (parseTags)
 import           Text.HTML.TagSoup.Selection as TS
 -- Export as Json
 import           Data.Aeson                  (ToJSON, encode)
+import           Database.SQLite.Simple
 -- Library in the works
 import           Charlotte
 import qualified Charlotte.Request           as Request
@@ -48,16 +50,20 @@ data PageData = PageData {
 } deriving (Show, Generic)
 
 instance ToJSON PageData
+
 type ParseResult = Result PageType PageData
 
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 0 "http://local.lasvegassun.com/"
+  , _startUrl = Page 1 "http://local.lasvegassun.com/"
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
 }
+
+crawlHost :: String
+crawlHost = "local.lasvegassun.com"
 
 maxDepth :: Int
 maxDepth = 2
@@ -66,10 +72,14 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   print $ "Running " <> _name siteMapSpider
-  withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
-    hSetBuffering hdl LineBuffering
-    runSpider siteMapSpider {_load = Just (load hdl)}
+  -- withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
+  --   hSetBuffering hdl LineBuffering
+  withConnection "/tmp/charlotte.db" (\conn -> do
+    execute_ conn "DROP TABLE IF EXISTS page_links"
+    execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL)"
+    runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
     )
+    -- )
   print $ "Finished Running " <> _name siteMapSpider
 
 -- parse :: Process (PageType Response) ParseResult
@@ -93,7 +103,7 @@ parseLinks :: Response -> [URI]
 parseLinks resp = let
   Right sel = parseSelector "a"
   responseUri = Request.uri $ Response.request resp
-  currentHost = URI.uriRegName <$> URI.uriAuthority responseUri
+  -- currentHost = URI.uriRegName <$> URI.uriAuthority responseUri
   r = (BSL.unpack $ Response.body resp) :: String
   tags = parseTags r
   tt = filter TS.isTagBranch $ TS.tagTree' tags
@@ -101,7 +111,7 @@ parseLinks resp = let
   relLinks = map (`URI.relativeTo` responseUri) $
     mapMaybe URI.parseRelativeReference $
     filter URI.isRelativeReference links
-  absLinks = filter (\l->(==currentHost) $ URI.uriRegName <$> URI.uriAuthority l) $
+  absLinks = filter (\l->(==Just crawlHost) $ URI.uriRegName <$> URI.uriAuthority l) $
     mapMaybe URI.parseAbsoluteURI $
     filter URI.isAbsoluteURI links
   in (absLinks <> relLinks)
@@ -111,5 +121,17 @@ pipeline x = do
   print x
   return x
 
-load :: ToJSON a => Handle -> a -> IO ()
-load fh item = BSL.hPutStrLn fh (encode item)
+loadJsonLinesFile :: ToJSON a => Handle -> a -> IO ()
+loadJsonLinesFile fh item = BSL.hPutStrLn fh (encode item)
+
+
+loadSqliteDb :: Connection -> PageData -> IO ()
+loadSqliteDb conn item = do
+  let page = pagePath item
+      depth = pageDepth item
+      links = pageLinks item
+  print $ "Inserting (" <> show (length links) <> ") page_links."
+  mapM_ (addPage page depth) links
+  print $ "Inserted (" <> show (length links) <> ") page_links."
+  where
+    addPage page depth link = (execute conn "INSERT INTO page_links (page, link, depth) VALUES (?,?,?)" (page, link, depth))
