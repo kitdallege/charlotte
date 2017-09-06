@@ -20,8 +20,8 @@ module Charlotte (
 ) where
 import           Prelude                    (Bool (..), Either (..), Foldable,
                                              Functor, IO, Maybe (..), Show (..),
-                                             String, Traversable, Int, fmap, filter, flip,
-                                             head, const,
+                                             String, Traversable, Int, Double, fmap, filter, flip,
+                                             head, const, realToFrac, (/),
                                              length, mapM_, not, putStr, putStrLn, foldMap, id,
                                              print, replicate, return, seq, sequence, ($),
                                              succ, pred, (==), (>), (&&), (<$),
@@ -35,6 +35,8 @@ import           Data.Either                (isLeft, isRight, rights)
 import           Data.Maybe (fromJust, isNothing, fromMaybe, mapMaybe)
 import Control.Category (Category)
 import Control.Concurrent (threadDelay, forkIO, MVar, newMVar, readMVar, putMVar, tryReadMVar, tryPutMVar)
+import           Data.Time                  (diffUTCTime, getZonedTime,
+                                             zonedTimeToUTC)
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import           Data.Semigroup             ((<>))
 import qualified Data.Set                   as S
@@ -234,6 +236,7 @@ makeRequest' manager seen req = do
 runSpider :: (Functor f, Traversable f, Show (f Request), Show b, Show (f Response)) =>
                            SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
+  startTime <- getZonedTime
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
       transform = fromMaybe return $_transform spiderDef
@@ -262,4 +265,12 @@ runSpider spiderDef = do
     drained <- isEmptyTQueue workerOutBox
     check drained
   log "workerOutBox is empty."
+  endTime <- getZonedTime
+  count <- atomically $ readTVar seen >>= \s->return $ S.size s
+  putStrLn $ "Number of Pages Processed: " <> show count
+  let diff = diffUTCTime (zonedTimeToUTC endTime) (zonedTimeToUTC startTime)
+      perSec = (if count > 0 then realToFrac count / realToFrac diff else 0.0) :: Double
+  putStrLn $ "Runtime: " <> show diff
+  when (count > 0) (putStrLn $ "Pages Per Second: " <> show perSec)
+  putStrLn $ "============ END " <> show endTime <> " ============"
   return ()

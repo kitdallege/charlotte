@@ -39,7 +39,8 @@ This program crawls a website and records 'internal' links on a page.
 Pages can then be rank'd via the # of other pages linking to them 'PageRank'.
 -}
 type Depth = Int
-data PageType a = Page Depth a
+type Ref = String
+data PageType a = Page Depth Ref a
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 type DataItem = Map.Map String String
@@ -47,6 +48,7 @@ data PageData = PageData {
     pagePath  :: String
   , pageLinks :: [String]
   , pageDepth :: Int
+  , pageRef   :: String
 } deriving (Show, Generic)
 
 instance ToJSON PageData
@@ -56,7 +58,7 @@ type ParseResult = Result PageType PageData
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 0 "http://local.lasvegassun.com/"
+  , _startUrl = Page 0 "NONE" "http://local.lasvegassun.com/"
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
@@ -70,7 +72,7 @@ maxDepth = 2
 
 main :: IO ()
 main = do
-  hSetBuffering stdout LineBuffering
+  -- hSetBuffering stdout LineBuffering
   print $ "Running " <> _name siteMapSpider
   -- withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
   --   hSetBuffering hdl LineBuffering
@@ -78,27 +80,27 @@ main = do
   -- )
   withConnection "/tmp/charlotte.db" (\conn -> do
     execute_ conn "DROP TABLE IF EXISTS page_links"
-    execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL)"
+    execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL, ref TEXT NOT NULL)"
     runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
     )
   print $ "Finished Running " <> _name siteMapSpider
 
 -- parse :: Process (PageType Response) ParseResult
 parse :: PageType Response -> [ParseResult]
-parse (Page depth resp) = do
+parse (Page depth ref resp) = do
   let nextDepth = succ depth
       links = parseLinks resp
       linkPaths = map URI.uriPath links
       responsePath = URI.uriPath $ Response.uri resp
       reqs = catMaybes $ Request.mkRequest <$> map show links
-      results = map (Request . Page nextDepth) reqs
+      results = map (Request . Page nextDepth ref) reqs
   if null results then
-    [Item $ PageData "nothing found!" [] depth]
+    [Item $ PageData "nothing found!" [] depth ref]
     else
       if depth >= maxDepth
-        then [Item $ PageData responsePath linkPaths depth]
+        then [Item $ PageData responsePath linkPaths depth ref]
         else
-          results <> [Item $ PageData responsePath linkPaths depth]
+          results <> [Item $ PageData responsePath linkPaths depth ref]
 
 parseLinks :: Response -> [URI]
 parseLinks resp = let
@@ -131,8 +133,9 @@ loadSqliteDb conn item = do
   let page = pagePath item
       depth = pageDepth item
       links = pageLinks item
+      ref = pageRef item
   print $ "Inserting (" <> show (length links) <> ") page_links."
-  withTransaction conn $ mapM_ (addPage page depth) links
+  withTransaction conn $ mapM_ (addPage page depth ref) links
   print $ "Inserted (" <> show (length links) <> ") page_links."
   where
-    addPage page depth link = (execute conn "INSERT INTO page_links (page, link, depth) VALUES (?,?,?)" (page, link, depth))
+    addPage page depth link ref = (execute conn "INSERT INTO page_links (page, link, depth, ref) VALUES (?,?,?,?)" (page, link, depth, ref))
