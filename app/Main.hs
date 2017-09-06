@@ -79,8 +79,7 @@ main = do
   withConnection "/tmp/charlotte.db" (\conn -> do
     execute_ conn "DROP TABLE IF EXISTS page_links"
     execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL)"
-    withTransaction conn $ do
-      runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
+    runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
     )
   print $ "Finished Running " <> _name siteMapSpider
 
@@ -133,7 +132,7 @@ loadSqliteDb conn item = do
       depth = pageDepth item
       links = pageLinks item
   print $ "Inserting (" <> show (length links) <> ") page_links."
-  mapM_ (addPage page depth) links
+  withTransaction conn $ mapM_ (addPage page depth) links
   print $ "Inserted (" <> show (length links) <> ") page_links."
   where
     addPage page depth link = (execute conn "INSERT INTO page_links (page, link, depth) VALUES (?,?,?)" (page, link, depth))
