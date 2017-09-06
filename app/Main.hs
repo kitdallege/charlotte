@@ -7,9 +7,9 @@
 module Main where
 import           Prelude                     (Eq, Foldable, Functor, IO, Int,
                                               Ord, Show, String, Traversable,
-                                              filter, map, null, print, return,
-                                              show, succ, ($), (.), (<$>), (==),
-                                              (>=), mapM_, length)
+                                              filter, length, map, mapM_, null,
+                                              print, return, show, succ, ($),
+                                              (.), (<), (<$>), (==))
 -- import Debug.Trace
 import           Control.Monad               (join)
 import qualified Data.ByteString.Lazy.Char8  as BSL
@@ -22,7 +22,7 @@ import           System.IO                   (BufferMode (..), Handle,
                                               IOMode (..), hSetBuffering,
                                               stdout, withFile)
 -- html handling
-import           Network.URI                 (URI(..))
+import           Network.URI                 (URI (..))
 import qualified Network.URI                 as URI
 import           Text.HTML.TagSoup           (parseTags)
 import           Text.HTML.TagSoup.Selection as TS
@@ -39,7 +39,8 @@ This program crawls a website and records 'internal' links on a page.
 Pages can then be rank'd via the # of other pages linking to them 'PageRank'.
 -}
 type Depth = Int
-data PageType a = Page Depth a
+type Ref = String
+data PageType a = Page Depth Ref a
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
 
 type DataItem = Map.Map String String
@@ -47,6 +48,7 @@ data PageData = PageData {
     pagePath  :: String
   , pageLinks :: [String]
   , pageDepth :: Int
+  , pageRef   :: String
 } deriving (Show, Generic)
 
 instance ToJSON PageData
@@ -56,7 +58,7 @@ type ParseResult = Result PageType PageData
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 1 "http://local.lasvegassun.com/"
+  , _startUrl = Page 1 "START" "http://local.lasvegassun.com/"
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
@@ -66,7 +68,7 @@ crawlHost :: String
 crawlHost = "local.lasvegassun.com"
 
 maxDepth :: Int
-maxDepth = 2
+maxDepth = 4
 
 main :: IO ()
 main = do
@@ -74,30 +76,25 @@ main = do
   print $ "Running " <> _name siteMapSpider
   -- withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
   --   hSetBuffering hdl LineBuffering
+  --   runSpider siteMapSpider {_load = Just (loadJsonLinesFile hdl)}
+  -- )
   withConnection "/tmp/charlotte.db" (\conn -> do
     execute_ conn "DROP TABLE IF EXISTS page_links"
-    execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL)"
+    execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL, ref TEXT NOT NULL)"
     runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
     )
-    -- )
   print $ "Finished Running " <> _name siteMapSpider
 
--- parse :: Process (PageType Response) ParseResult
 parse :: PageType Response -> [ParseResult]
-parse (Page depth resp) = do
+parse (Page depth ref resp) = do
   let nextDepth = succ depth
       links = parseLinks resp
       linkPaths = map URI.uriPath links
       responsePath = URI.uriPath $ Response.uri resp
       reqs = catMaybes $ Request.mkRequest <$> map show links
-      results = map (Request . Page nextDepth) reqs
-  if null results then
-    [Item $ PageData "nothing found!" [] depth]
-    else
-      if depth >= maxDepth
-        then [Item $ PageData responsePath linkPaths depth]
-        else
-          results <> [Item $ PageData responsePath linkPaths depth]
+      results = map (Request . Page nextDepth responsePath) reqs
+      items = [Item $ PageData responsePath linkPaths depth ref]
+  if null results then [] else if depth < maxDepth then results <> items else items
 
 parseLinks :: Response -> [URI]
 parseLinks resp = let
@@ -124,14 +121,13 @@ pipeline x = do
 loadJsonLinesFile :: ToJSON a => Handle -> a -> IO ()
 loadJsonLinesFile fh item = BSL.hPutStrLn fh (encode item)
 
-
 loadSqliteDb :: Connection -> PageData -> IO ()
 loadSqliteDb conn item = do
   let page = pagePath item
       depth = pageDepth item
       links = pageLinks item
-  print $ "Inserting (" <> show (length links) <> ") page_links."
-  mapM_ (addPage page depth) links
-  print $ "Inserted (" <> show (length links) <> ") page_links."
+      ref = pageRef item
+  withTransaction conn $ mapM_ (addPage page depth ref) links
+  print $ "Inserted (" <> show (length links) <> ") page_links!"
   where
-    addPage page depth link = (execute conn "INSERT INTO page_links (page, link, depth) VALUES (?,?,?)" (page, link, depth))
+    addPage page depth ref link = (execute conn "INSERT INTO page_links (page, link, depth, ref) VALUES (?,?,?,?)" (page, link, depth, ref))
