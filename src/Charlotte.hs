@@ -24,7 +24,7 @@ import           Prelude                    (Bool (..), Either (..), Foldable,
                                              head, const, realToFrac, (/),
                                              length, mapM_, not, putStr, putStrLn, foldMap, id,
                                              print, replicate, return, seq, sequence, ($),
-                                             succ, pred, (==), (>), (&&), (<$),
+                                             succ, pred, (==), (>), (&&), (<$), (<=), (&&), (<),
                                              ($!), (.), (/=), (<$>), (>>))
 
 import Debug.Trace
@@ -198,7 +198,12 @@ makeRequest' manager seen req = do
     log $ (if isRight resp then "makeRequest: Success " else "makeRequest: Error ") <> show (Request.uri req)
     case resp of
       Left e -> return $ Left $ show  (e :: C.HttpException)
-      Right r -> return (Right $ Response.mkResponse (Request.uri req) req r)
+      Right r ->
+        let code = NT.statusCode (C.responseStatus r) in
+          if 200 <= code && code < 300 then
+            return (Right $ Response.mkResponse (Request.uri req) req r)
+            else
+              return $ Left ("StatusCodeException: code=" <> show code <> " returned.")
     else
       return $ Left ("Duplicate request"::String)
 runSpider :: (Functor f, Traversable f, Show (f Request), Show b, Show (f Response)) =>

@@ -14,7 +14,7 @@ import           Network.URI         as URI
 
 import           Charlotte.Types  (Flag, Meta)
 
-data Request = Request {
+data  Request = Request {
     uri             :: URI.URI
   , internalRequest :: C.Request
   , meta            :: Meta
