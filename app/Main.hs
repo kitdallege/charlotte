@@ -56,7 +56,7 @@ type ParseResult = Result PageType PageData
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 1 "http://local.lasvegassun.com/"
+  , _startUrl = Page 0 "http://local.lasvegassun.com/"
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
@@ -74,12 +74,14 @@ main = do
   print $ "Running " <> _name siteMapSpider
   -- withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
   --   hSetBuffering hdl LineBuffering
+  --   runSpider siteMapSpider {_load = Just (loadJsonLinesFile hdl)}
+  -- )
   withConnection "/tmp/charlotte.db" (\conn -> do
     execute_ conn "DROP TABLE IF EXISTS page_links"
     execute_ conn "CREATE TABLE IF NOT EXISTS page_links (id INTEGER PRIMARY KEY, page TEXT NOT NULL, link TEXT NOT NULL, depth INTEGER NOT NULL)"
-    runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
+    withTransaction conn $ do
+      runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
     )
-    -- )
   print $ "Finished Running " <> _name siteMapSpider
 
 -- parse :: Process (PageType Response) ParseResult
