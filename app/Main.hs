@@ -7,9 +7,9 @@
 module Main where
 import           Prelude                     (Eq, Foldable, Functor, IO, Int,
                                               Ord, Show, String, Traversable,
-                                              filter, map, null, print, return,
-                                              show, succ, ($), (.), (<$>), (==),
-                                              (>=), mapM_, length)
+                                              filter, length, map, mapM_, null,
+                                              print, return, show, succ, ($),
+                                              (.), (<), (<$>), (==))
 -- import Debug.Trace
 import           Control.Monad               (join)
 import qualified Data.ByteString.Lazy.Char8  as BSL
@@ -22,7 +22,7 @@ import           System.IO                   (BufferMode (..), Handle,
                                               IOMode (..), hSetBuffering,
                                               stdout, withFile)
 -- html handling
-import           Network.URI                 (URI(..))
+import           Network.URI                 (URI (..))
 import qualified Network.URI                 as URI
 import           Text.HTML.TagSoup           (parseTags)
 import           Text.HTML.TagSoup.Selection as TS
@@ -58,7 +58,7 @@ type ParseResult = Result PageType PageData
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 0 "NONE" "http://local.lasvegassun.com/"
+  , _startUrl = Page 1 "NONE" "http://local.lasvegassun.com/"
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
@@ -68,11 +68,11 @@ crawlHost :: String
 crawlHost = "local.lasvegassun.com"
 
 maxDepth :: Int
-maxDepth = 2
+maxDepth = 4
 
 main :: IO ()
 main = do
-  -- hSetBuffering stdout LineBuffering
+  hSetBuffering stdout LineBuffering
   print $ "Running " <> _name siteMapSpider
   -- withFile "/tmp/charlotte.jl" WriteMode (\ hdl -> do
   --   hSetBuffering hdl LineBuffering
@@ -93,14 +93,16 @@ parse (Page depth ref resp) = do
       linkPaths = map URI.uriPath links
       responsePath = URI.uriPath $ Response.uri resp
       reqs = catMaybes $ Request.mkRequest <$> map show links
-      results = map (Request . Page nextDepth ref) reqs
+      results = map (Request . Page nextDepth responsePath) reqs
   if null results then
     [Item $ PageData "nothing found!" [] depth ref]
     else
-      if depth >= maxDepth
-        then [Item $ PageData responsePath linkPaths depth ref]
-        else
+      if depth < maxDepth
+        then
           results <> [Item $ PageData responsePath linkPaths depth ref]
+        else
+          [Item $ PageData responsePath linkPaths depth ref]
+
 
 parseLinks :: Response -> [URI]
 parseLinks resp = let
@@ -134,8 +136,7 @@ loadSqliteDb conn item = do
       depth = pageDepth item
       links = pageLinks item
       ref = pageRef item
-  print $ "Inserting (" <> show (length links) <> ") page_links."
   withTransaction conn $ mapM_ (addPage page depth ref) links
-  print $ "Inserted (" <> show (length links) <> ") page_links."
+  print $ "Inserted (" <> show (length links) <> ") page_links!"
   where
-    addPage page depth link ref = (execute conn "INSERT INTO page_links (page, link, depth, ref) VALUES (?,?,?,?)" (page, link, depth, ref))
+    addPage page depth ref link = (execute conn "INSERT INTO page_links (page, link, depth, ref) VALUES (?,?,?,?)" (page, link, depth, ref))

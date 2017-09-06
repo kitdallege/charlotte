@@ -98,37 +98,9 @@ data JobQueue a = JobQueue {-# UNPACK #-} !(TQueue a)
                            {-# UNPACK #-} !(TVar Int)
   deriving Typeable
 
-
-
 log :: (MonadIO m) => String -> m ()
 log str = liftIO $ putStrLn str
---
--- -- jobQueueProducer :: JobQueue a -> PlanT k a IO ()
--- jobQueueProducer :: JobQueue a -> SourceT IO a
--- jobQueueProducer q = construct go
---   where
---     go = do
---       active <- liftIO $ atomically $ isActiveJobQueue q
---       unless active (log $ "jobQueueProducer: stopping active is False")
---       unless active stop
---       cnt <- liftIO $ atomically $ jobQueueActiveCount q
---       log $ "jobQueueProducer: readJobQueue (" <> show cnt <> ") active jobs"
---       isEmpty <- liftIO $ atomically $ isEmptyJobQueue q
---       log $ "jobQueueProducer: readJobQueue isEmpty: " <> show isEmpty
---       unless isEmpty $ do
---         r <- liftIO $ atomically $ readJobQueue q
---         log $ "jobQueueProducer: got value yielding"
---         yield r
---       when isEmpty $  do
---         log $ "jobQueueProducer: isEmpty. sleeping a bit."
---         liftIO $ threadDelay 2000000
---       -- when (isEmpty && (cnt == 1)) $ do
---       --   log $ "jobQueueProducer: isEmpty with a active count of 1"
---       --   r <- liftIO $ atomically $ readJobQueue q
---       --   log $ "jobQueueProducer: got value yielding"
---       --   yield r
---       go
-
+-- log _ = return ()
 
 newJobQueueIO :: IO (JobQueue a)
 newJobQueueIO = do
@@ -155,9 +127,6 @@ isActiveJobQueue (JobQueue _ active) = do
   c <- readTVar active
   return (c /= 0)
 
--- jobQueueActiveCount :: JobQueue a -> STM Int
--- jobQueueActiveCount (JobQueue _ active) = readTVar active
-
 pipeline :: TQueue [b] -> (b -> IO b) -> (b -> IO ()) -> IO ()
 pipeline inBox transform load = forever loop
   where
@@ -170,8 +139,6 @@ pipeline inBox transform load = forever loop
       mapM_ load items'
       log "== pipeline loaded items"
 
-
-
 workerWrapper :: Traversable a =>
   C.Manager ->
   JobQueue (a Request) ->
@@ -182,7 +149,6 @@ workerWrapper :: Traversable a =>
 workerWrapper manager inBox outBox extract seen = forever loop
   where
     loop = do
-      threadDelay 20
       log "workerWrapper: reading req from inbox"
       req <- atomically $ readJobQueue inBox
       log "workerWrapper: read req from inbox & performing IO now"
@@ -198,6 +164,8 @@ workerWrapper manager inBox outBox extract seen = forever loop
               reqs = mapMaybe resultGetRequest $ filter resultIsRequest results
               items = mapMaybe resultGetItem $ filter resultIsItem results
           log "workerWrapper: writing response to outBox"
+          log $ "workerWrapper: (" <> show (length items) <> ") items."
+          log $ "workerWrapper: (" <> show (length reqs) <> ") requests."
           atomically $ do
             writeTQueue outBox items
             mapM_ (writeJobQueue inBox) reqs
@@ -237,10 +205,12 @@ runSpider :: (Functor f, Traversable f, Show (f Request), Show b, Show (f Respon
                            SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
   startTime <- getZonedTime
+  putStrLn $ "============ START " <> show startTime <> " ============"
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
       transform = fromMaybe return $_transform spiderDef
       load = fromMaybe (const (return ())) $ _load spiderDef
+
   -- bail if there is nothing to do.
   when (F.any isNothing startReq) (return ())
   let startReq' = fromJust <$> startReq
@@ -249,8 +219,14 @@ runSpider spiderDef = do
   -- Spin up the downloader worker threads
   workerInBox <- newJobQueueIO -- :: IO (JobQueue (f Request))
   workerOutBox <- newTQueueIO  -- :: IO (TQueue (f Result )))
-  manager <- C.newManager tlsManagerSettings -- {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
-  replicateM_ 5 . forkIO $ workerWrapper manager workerInBox workerOutBox extract seen
+  manager <- C.newManager tlsManagerSettings {
+      C.managerResponseTimeout = C.responseTimeoutMicro 60000000
+    , C.managerModifyRequest = \req->return $ req {
+        C.requestHeaders = [("User-Agent", "Charlotte/v0.0.1 (https://github.com/kitdallege/charlotte)")]
+    }
+  }
+  -- {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
+  replicateM_ 3 . forkIO $ workerWrapper manager workerInBox workerOutBox extract seen
   -- Spin up Pipeline worker thread
   void (forkIO $ pipeline workerOutBox transform load)
   -- populate Queue with the first item.
@@ -266,6 +242,7 @@ runSpider spiderDef = do
     check drained
   log "workerOutBox is empty."
   endTime <- getZonedTime
+  threadDelay 20000 -- hope that the pipeline tasks finish up TODO: Real solution
   count <- atomically $ readTVar seen >>= \s->return $ S.size s
   putStrLn $ "Number of Pages Processed: " <> show count
   let diff = diffUTCTime (zonedTimeToUTC endTime) (zonedTimeToUTC startTime)
