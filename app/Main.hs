@@ -58,7 +58,7 @@ type ParseResult = Result PageType PageData
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 1 "NONE" "http://local.lasvegassun.com/"
+  , _startUrl = Page 1 "START" "http://local.lasvegassun.com/"
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
@@ -85,7 +85,6 @@ main = do
     )
   print $ "Finished Running " <> _name siteMapSpider
 
--- parse :: Process (PageType Response) ParseResult
 parse :: PageType Response -> [ParseResult]
 parse (Page depth ref resp) = do
   let nextDepth = succ depth
@@ -94,15 +93,8 @@ parse (Page depth ref resp) = do
       responsePath = URI.uriPath $ Response.uri resp
       reqs = catMaybes $ Request.mkRequest <$> map show links
       results = map (Request . Page nextDepth responsePath) reqs
-  if null results then
-    [Item $ PageData "nothing found!" [] depth ref]
-    else
-      if depth < maxDepth
-        then
-          results <> [Item $ PageData responsePath linkPaths depth ref]
-        else
-          [Item $ PageData responsePath linkPaths depth ref]
-
+      items = [Item $ PageData responsePath linkPaths depth ref]
+  if null results then [] else if depth < maxDepth then results <> items else items
 
 parseLinks :: Response -> [URI]
 parseLinks resp = let
@@ -128,7 +120,6 @@ pipeline x = do
 
 loadJsonLinesFile :: ToJSON a => Handle -> a -> IO ()
 loadJsonLinesFile fh item = BSL.hPutStrLn fh (encode item)
-
 
 loadSqliteDb :: Connection -> PageData -> IO ()
 loadSqliteDb conn item = do
