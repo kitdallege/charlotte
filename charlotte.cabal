@@ -45,6 +45,7 @@ executable charlotte-exe
                      , containers
                      , network-uri
                      , sqlite-simple
+                     , time
                      , tagsoup
                      , tagsoup-selection
   default-language:    Haskell2010

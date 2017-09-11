@@ -16,8 +16,8 @@ import qualified Network.HTTP.Client        as C
 import qualified Network.HTTP.Types         as NT
 import           Network.URI                as URI
 
-import           Charlotte.Types  (Flag, Meta)
-import Charlotte.Request (Request)
+import           Charlotte.Request          (Request)
+import           Charlotte.Types            (Flag, Meta)
 
 data Response = Response {
     uri              :: URI.URI

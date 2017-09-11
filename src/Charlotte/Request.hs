@@ -5,14 +5,12 @@ module Charlotte.Request (
   , uri
 
 ) where
-import qualified Data.Typeable as T (Typeable)
 import qualified Data.Map.Strict     as Map
+import qualified Data.Typeable       as T (Typeable)
 import qualified Network.HTTP.Client as C
--- import qualified Network.HTTP.Client.TLS    (tlsManagerSettings)
 import           Network.URI         as URI
--- import Network.HTTP.Types as NT
 
-import           Charlotte.Types  (Flag, Meta)
+import           Charlotte.Types     (Flag, Meta)
 
 data  Request = Request {
     uri             :: URI.URI

@@ -1,7 +1,7 @@
+-- stylish-haskell wants FlexibleContexts but its not needed for ghc.
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE RankNTypes #-}
 module Charlotte (
     SpiderDefinition(..)
   , Result(..)
@@ -9,60 +9,41 @@ module Charlotte (
   , Request
   , runSpider
   , Request.mkRequest
-  --TODO move to a new home
-  , JobQueue(..)
-  -- , jobQueueProducer
-  , newJobQueueIO
-  , writeJobQueue
-  , readJobQueue
-  , isEmptyJobQueue
-  , taskCompleteJobQueue
 ) where
-import           Prelude                    (Bool (..), Either (..), Foldable,
+import           Prelude                    (Bool (..), Double, Either (..),
                                              Functor, IO, Maybe (..), Show (..),
-                                             String, Traversable, Int, Double, fmap, filter, flip,
-                                             head, const, realToFrac, (/),
-                                             length, mapM_, not, putStr, putStrLn, foldMap, id,
-                                             print, replicate, return, seq, sequence, ($),
-                                             succ, pred, (==), (>), (&&), (<$), (<=), (&&), (<),
-                                             ($!), (.), (/=), (<$>), (>>))
-
-import Debug.Trace
-import Data.Foldable as F
-import Control.Applicative ((*>))
-import           Control.Monad              (when, unless, mapM, forever, replicateM_, void, (>>=))
-import           Data.Either                (isLeft, isRight, rights)
-import           Data.Maybe (fromJust, isNothing, fromMaybe, mapMaybe)
-import Control.Category (Category)
-import Control.Concurrent (threadDelay, forkIO, MVar, newMVar, readMVar, putMVar, tryReadMVar, tryPutMVar)
-import           Data.Time                  (diffUTCTime, getZonedTime,
-                                             zonedTimeToUTC)
-import qualified Data.ByteString.Lazy.Char8 as BSL8
-import           Data.Semigroup             ((<>))
-import qualified Data.Set                   as S
-import           Data.Typeable              (Typeable)
-import qualified Network.HTTP.Client        as C
-import           Network.HTTP.Client.TLS    (tlsManagerSettings)
-import qualified Network.URI as URI
-import Network.HTTP.Types as NT
-
+                                             String, Traversable, const, filter,
+                                             head, length, mapM_, not, putStrLn,
+                                             realToFrac, return, sequence, ($),
+                                             (&&), (&&), (.), (/), (/=), (<),
+                                             (<$), (<$>), (<=), (>))
+-- import           Debug.Trace
+import           Control.Concurrent         (forkIO, threadDelay)
 import           Control.Concurrent.STM
 import qualified Control.Exception          as E
+import           Control.Monad              (forever, mapM, replicateM_, void,
+                                             when, (>>=))
 import           Control.Monad.IO.Class     (MonadIO, liftIO)
--- import           Data.Machine
--- import           Data.Machine.Concurrent    (scatter, (>~>))
-import Control.Concurrent.Async (async, wait)
--- import           Data.Machine.Regulated     (regulated)
--- import qualified Network.HTTP.Types         as CT
--- import           Data.Text.Encoding.Error (lenientDecode)
--- import           Data.Text.Lazy.Encoding  (decodeUtf8With)
-import qualified Data.Text                as T
--- import           Text.Taggy.Lens          (allNamed, attr, html)
-import Charlotte.Response (Response)
-import Charlotte.Request (Request)
-import qualified Charlotte.Response as Response
-import qualified Charlotte.Request as Request
+import qualified Data.ByteString            as BS
+import qualified Data.ByteString.Lazy.Char8 as BSL8
+import           Data.Either                (isRight)
+import           Data.Foldable              as F
+import           Data.Maybe                 (fromJust, fromMaybe, isNothing,
+                                             mapMaybe)
+import           Data.Semigroup             ((<>))
+import qualified Data.Set                   as S
+import           Data.Time                  (diffUTCTime, getZonedTime,
+                                             zonedTimeToUTC)
+import qualified Network.HTTP.Client        as C
+import           Network.HTTP.Client.TLS    (tlsManagerSettings)
+import           Network.HTTP.Types         as NT
+import qualified Network.URI                as URI
 
+import           Charlotte.Request          (Request)
+import qualified Charlotte.Request          as Request
+import           Charlotte.Response         (Response)
+import qualified Charlotte.Response         as Response
+import           Charlotte.Types
 
 data Result a b =
     Request (a Request)
@@ -72,9 +53,11 @@ instance (Show (a Request), Show b) => Show (Result a b) where
   show (Request r) = "Result Request (" <> show r <> ")"
   show (Item i)    = "Result " <> show i
 
-resultIsItem,resultIsRequest :: Result a b -> Bool
-resultIsItem (Item _) = True
-resultIsItem _        = False
+resultIsItem :: Result a b -> Bool
+resultIsItem (Item _)    = True
+resultIsItem (Request _) = False
+
+resultIsRequest :: Result a b -> Bool
 resultIsRequest = not . resultIsItem
 
 resultGetRequest :: Result a b -> Maybe (a Request)
@@ -94,50 +77,21 @@ data SpiderDefinition a b = SpiderDefinition {
 }
 
 ------ new stuff -----------
-data JobQueue a = JobQueue {-# UNPACK #-} !(TQueue a)
-                           {-# UNPACK #-} !(TVar Int)
-  deriving Typeable
 
 log :: (MonadIO m) => String -> m ()
 log str = liftIO $ putStrLn str
--- log _ = return ()
-
-newJobQueueIO :: IO (JobQueue a)
-newJobQueueIO = do
-  queue   <- newTQueueIO
-  active  <- newTVarIO (0 :: Int)
-  return (JobQueue queue active)
-
-readJobQueue :: JobQueue a -> STM a
-readJobQueue (JobQueue queue _ ) = readTQueue queue
-
-writeJobQueue :: JobQueue a-> a -> STM ()
-writeJobQueue (JobQueue queue active) a = do
-  writeTQueue queue a
-  modifyTVar' active succ
-
-taskCompleteJobQueue :: JobQueue a -> STM ()
-taskCompleteJobQueue (JobQueue _ active) = modifyTVar' active pred
-
-isEmptyJobQueue :: JobQueue a -> STM Bool
-isEmptyJobQueue (JobQueue queue _) = isEmptyTQueue queue
-
-isActiveJobQueue :: JobQueue a -> STM Bool
-isActiveJobQueue (JobQueue _ active) = do
-  c <- readTVar active
-  return (c /= 0)
 
 pipeline :: TQueue [b] -> (b -> IO b) -> (b -> IO ()) -> IO ()
 pipeline inBox transform load = forever loop
   where
     loop = do
-      log "== pipeline get items"
+      log "== pipeline get items =="
       items <- atomically $ readTQueue inBox
       log "pipeline got items"
       items' <- mapM transform items
       log "pipeline transformed items"
       mapM_ load items'
-      log "== pipeline loaded items"
+      log "== pipeline loaded items =="
 
 workerWrapper :: Traversable a =>
   C.Manager ->
@@ -185,10 +139,13 @@ makeRequest' manager seen req = do
     atomically $ writeTVar seen (S.insert uri seen')
     log $ "makeRequest: Requesting: " <> show (Request.uri req)
     resp <- E.try $ C.withResponseHistory req' manager $ \hr -> do
-        log $ "makeRequest: Downloaded: " <> show (Request.uri req)
         let orginhost = C.host req'
-            finalhost = C.host $ C.hrFinalRequest hr
+            finalReq = C.hrFinalRequest hr
+            finalhost = C.host finalReq
+            numOfRedirects = length $ C.hrRedirects hr
             res = C.hrFinalResponse hr
+        log $ "makeRequest: Downloaded: " <> show (BS.concat [if C.secure finalReq then "https://" else "http://", C.host finalReq, C.path finalReq])
+        log $ "makeRequest: Redirect Check: orginhost=" <> show orginhost <> " finalhost=" <> show finalhost <> " (" <> show numOfRedirects <> ") redirects."
         when ((/=) orginhost finalhost) $ E.throw $
           C.InvalidUrlException
             (show (C.getUri (C.hrFinalRequest hr)))
