@@ -90,7 +90,7 @@ pipeline inBox transform load = forever loop
       log "pipeline got items"
       items' <- mapM transform items
       log "pipeline transformed items"
-      mapM_ load items'
+      E.catch (mapM_ load items') ((\ex -> putStrLn (show ex)):: E.SomeException -> IO())
       log "== pipeline loaded items =="
 
 workerWrapper :: Traversable a =>
@@ -199,6 +199,7 @@ runSpider spiderDef = do
     active <- isActiveJobQueue workerInBox
     check (not active)
   log "WorkerInBox not active."
+  threadDelay 20000
   atomically $ do
     drained <- isEmptyTQueue workerOutBox
     check drained
