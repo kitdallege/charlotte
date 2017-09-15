@@ -85,7 +85,7 @@ crawlHostURI :: URI
 Just crawlHostURI = URI.parseURI "http://local.lasvegassun.com"
 
 maxDepth :: Int
-maxDepth = 2
+maxDepth = 4
 
 main :: IO ()
 main = do
