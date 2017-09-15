@@ -20,9 +20,12 @@ library
                        Charlotte.Request
                        Charlotte.Types
   build-depends:       base >= 4.7 && < 5
-                     , async
                      , bytestring
                      , containers
+                     , distributed-process
+                     , distributed-process-async
+                     , distributed-process-extras
+                     , distributed-process-client-server
                      , exceptions
                      , http-client
                      , http-client-tls

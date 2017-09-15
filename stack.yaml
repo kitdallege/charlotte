@@ -40,7 +40,9 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- concurrent-machines-0.3.1
+- distributed-process-async-0.2.4
+- distributed-process-extras-0.3.2
+- distributed-process-client-server-0.2.3
 - tagsoup-0.13.10
 - tagsoup-selection-0.1.0.1
 

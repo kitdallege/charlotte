@@ -108,17 +108,17 @@ mainDb filenamePart =
     runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
 
 parse :: PageType Response -> [ParseResult]
-parse (Page depth ref resp) = do
-  let nextDepth = succ depth
-      tagTree = parseTagTree resp
-      links = parseLinks tagTree
-      linkPaths = map URI.uriPath links
-      metaTags = parseMetaTags tagTree
-      responsePath = URI.uriPath $ Response.uri resp
-      reqs = catMaybes $ Request.mkRequest <$> map show links
-      results = map (Request . Page nextDepth responsePath) reqs
-      items = [Item $ PageData responsePath linkPaths depth ref metaTags]
-  if depth < maxDepth then results <> items else items
+parse (Page depth ref resp) = let
+  nextDepth = succ depth
+  tagTree = parseTagTree resp
+  links = parseLinks tagTree
+  linkPaths = map URI.uriPath links
+  metaTags = parseMetaTags tagTree
+  responsePath = URI.uriPath $ Response.uri resp
+  reqs = catMaybes $ Request.mkRequest <$> map show links
+  results = map (Request . Page nextDepth responsePath) reqs
+  items = [Item $ PageData responsePath linkPaths depth ref metaTags]
+  in if depth < maxDepth then results <> items else items
 
 parseTagTree :: Response -> [TagTree String]
 parseTagTree resp = let

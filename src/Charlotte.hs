@@ -8,6 +8,7 @@ module Charlotte (
   , Response
   , Request
   , runSpider
+  , runSpiderDistributed
   , Request.mkRequest
 ) where
 import           Prelude                    (Bool (..), Double, Either (..),
@@ -213,4 +214,12 @@ runSpider spiderDef = do
   putStrLn $ "Runtime: " <> show diff
   when (count > 0) (putStrLn $ "Pages Per Second: " <> show perSec)
   putStrLn $ "============ END " <> show endTime <> " ============"
+  return ()
+
+
+runSpiderDistributed :: (Functor f, Traversable f, Show (f Request), Show b, Show (f Response)) =>
+                             SpiderDefinition f b -> IO ()
+
+runSpiderDistributed spiderDef = do
+  
   return ()
