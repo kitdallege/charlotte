@@ -26,6 +26,7 @@ library
                      , distributed-process-async
                      , distributed-process-extras
                      , distributed-process-client-server
+                     , distributed-process-simplelocalnet
                      , exceptions
                      , http-client
                      , http-client-tls

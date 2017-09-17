@@ -11,48 +11,76 @@ module Charlotte (
   , runSpiderDistributed
   , Request.mkRequest
 ) where
-import           Prelude                    (Bool (..), Double, Either (..),
-                                             Functor, IO, Maybe (..), Show (..),
-                                             String, Traversable, const, filter,
-                                             head, length, mapM_, not, putStrLn,
-                                             realToFrac, return, sequence, ($),
-                                             (&&), (&&), (.), (/), (/=), (<),
-                                             (<$), (<$>), (<=), (>))
+import           Prelude                                            (Bool (..),
+                                                                     Double,
+                                                                     Either (..),
+                                                                     IO,
+                                                                     Maybe (..),
+                                                                     Show (..),
+                                                                     String,
+                                                                     const,
+                                                                     filter,
+                                                                     fst,
+                                                                     length,
+                                                                     mapM_, not,
+                                                                     putStrLn,
+                                                                     print,
+                                                                     realToFrac,
+                                                                     return,
+                                                                     snd, ($),
+                                                                     (&&), (&&),
+                                                                     (.), (/),
+                                                                     (/=), (<),
+                                                                     (<$>),
+                                                                     (<=), (>))
 -- import           Debug.Trace
-import           Control.Concurrent         (forkIO, threadDelay)
+--- Cloud Stuffs
+import           Control.Distributed.Process
+import           Control.Distributed.Process.Backend.SimpleLocalnet
+import           Control.Distributed.Process.Node                   (initRemoteTable)
+---
+import           Control.Concurrent                                 (forkIO,
+                                                                     threadDelay)
 import           Control.Concurrent.STM
-import qualified Control.Exception          as E
-import           Control.Monad              (forever, mapM, replicateM_, void,
-                                             when, (>>=))
-import           Control.Monad.IO.Class     (MonadIO, liftIO)
-import qualified Data.ByteString            as BS
-import qualified Data.ByteString.Lazy.Char8 as BSL8
-import           Data.Either                (isRight)
-import           Data.Foldable              as F
-import           Data.Maybe                 (fromJust, fromMaybe, isNothing,
-                                             mapMaybe)
-import           Data.Semigroup             ((<>))
-import qualified Data.Set                   as S
-import           Data.Time                  (diffUTCTime, getZonedTime,
-                                             zonedTimeToUTC)
-import qualified Network.HTTP.Client        as C
-import           Network.HTTP.Client.TLS    (tlsManagerSettings)
-import           Network.HTTP.Types         as NT
-import qualified Network.URI                as URI
+import qualified Control.Exception                                  as E
+import           Control.Monad                                      (forever,
+                                                                     mapM,
+                                                                     replicateM_,
+                                                                     void, when,
+                                                                     (>>=))
+import           Control.Monad.IO.Class                             (MonadIO,
+                                                                     liftIO)
+import qualified Data.ByteString                                    as BS
+import qualified Data.ByteString.Lazy.Char8                         as BSL8
+import           Data.Either                                        (isRight)
+import           Data.Foldable                                      as F
+import           Data.Maybe                                         (fromJust,
+                                                                     fromMaybe,
+                                                                     isNothing,
+                                                                     mapMaybe)
+import           Data.Semigroup                                     ((<>))
+import qualified Data.Set                                           as S
+import           Data.Time                                          (diffUTCTime,
+                                                                     getZonedTime,
+                                                                     zonedTimeToUTC)
+import qualified Network.HTTP.Client                                as C
+import           Network.HTTP.Client.TLS                            (tlsManagerSettings)
+import           Network.HTTP.Types                                 as NT
+import qualified Network.URI                                        as URI
 
-import           Charlotte.Request          (Request)
-import qualified Charlotte.Request          as Request
-import           Charlotte.Response         (Response)
-import qualified Charlotte.Response         as Response
+import           Charlotte.Request                                  (Request)
+import qualified Charlotte.Request                                  as Request
+import           Charlotte.Response                                 (Response)
+import qualified Charlotte.Response                                 as Response
 import           Charlotte.Types
 
 data Result a b =
-    Request (a Request)
+    Request (a, Request)
   | Item  b
 
-instance (Show (a Request), Show b) => Show (Result a b) where
-  show (Request r) = "Result Request (" <> show r <> ")"
-  show (Item i)    = "Result " <> show i
+instance (Show a, Show b) => Show (Result a b) where
+  show (Request (_, r)) = "Result Request (" <> show r <> ")"
+  show (Item i)         = "Result " <> show i
 
 resultIsItem :: Result a b -> Bool
 resultIsItem (Item _)    = True
@@ -61,7 +89,7 @@ resultIsItem (Request _) = False
 resultIsRequest :: Result a b -> Bool
 resultIsRequest = not . resultIsItem
 
-resultGetRequest :: Result a b -> Maybe (a Request)
+resultGetRequest :: Result a b -> Maybe (a, Request)
 resultGetRequest (Request r) = Just r
 resultGetRequest _           = Nothing
 
@@ -71,8 +99,8 @@ resultGetItem _         = Nothing
 
 data SpiderDefinition a b = SpiderDefinition {
     _name      :: String
-  , _startUrl  :: a String                                   -- source
-  , _extract   :: a Response -> [Result a b]               -- extract
+  , _startUrl  :: (a, String)                              -- source
+  , _extract   :: a -> Response -> [Result a b]               -- extract
   , _transform :: Maybe (b -> IO b)   -- transform
   , _load      :: Maybe (b -> IO ())                -- load
 }
@@ -91,14 +119,14 @@ pipeline inBox transform load = forever loop
       log "pipeline got items"
       items' <- mapM transform items
       log "pipeline transformed items"
-      E.catch (mapM_ load items') ((\ex -> putStrLn (show ex)):: E.SomeException -> IO())
+      E.catch (mapM_ load items') (print :: E.SomeException -> IO())
       log "== pipeline loaded items =="
 
-workerWrapper :: Traversable a =>
+workerWrapper :: Show a =>
   C.Manager ->
-  JobQueue (a Request) ->
+  JobQueue (a, Request) ->
   TQueue [b1] ->
-  (a Response -> [Result a b1]) ->
+  (a -> Response -> [Result a b1]) ->
   TVar (S.Set String) ->
   IO b
 workerWrapper manager inBox outBox extract seen = forever loop
@@ -107,15 +135,13 @@ workerWrapper manager inBox outBox extract seen = forever loop
       log "workerWrapper: reading req from inbox"
       req <- atomically $ readJobQueue inBox
       log "workerWrapper: read req from inbox & performing IO now"
-      resp <- sequence $ makeRequest' manager seen <$> req
-      let resp' = head $ F.toList resp
-      case resp' of
+      resp <- makeRequest' manager seen (snd req)
+      case resp of
         Left str -> do
           log $ "workerWrapper: download error: " <> str
           atomically $ taskCompleteJobQueue inBox
-        Right resp'' -> do
-          let resp''' = resp'' <$ resp
-              results = extract resp'''
+        Right resp' -> do
+          let results = extract (fst req) resp'
               reqs = mapMaybe resultGetRequest $ filter resultIsRequest results
               items = mapMaybe resultGetItem $ filter resultIsItem results
           log "workerWrapper: writing response to outBox"
@@ -127,8 +153,6 @@ workerWrapper manager inBox outBox extract seen = forever loop
             taskCompleteJobQueue inBox
           log "workerWrapper: response wrote to outBox"
       return ()
-
-
 
 makeRequest' :: C.Manager -> TVar (S.Set String) -> Request -> IO (Either String Response)
 makeRequest' manager seen req = do
@@ -164,8 +188,8 @@ makeRequest' manager seen req = do
               return $ Left ("StatusCodeException: code=" <> show code <> " returned.")
     else
       return $ Left ("Duplicate request"::String)
-runSpider :: (Functor f, Traversable f, Show (f Request), Show b, Show (f Response)) =>
-                           SpiderDefinition f b -> IO ()
+
+runSpider :: (Show f, Show b) => SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
   startTime <- getZonedTime
   putStrLn $ "============ START " <> show startTime <> " ============"
@@ -217,9 +241,16 @@ runSpider spiderDef = do
   return ()
 
 
-runSpiderDistributed :: (Functor f, Traversable f, Show (f Request), Show b, Show (f Response)) =>
-                             SpiderDefinition f b -> IO ()
 
+
+runSpiderDistributed :: (Show f, Show b) => SpiderDefinition f b -> IO ()
 runSpiderDistributed spiderDef = do
-  
+  log $ _name spiderDef
+  backend <- initializeBackend "127.0.0.1" "9000" initRemoteTable
+  startMaster backend $ \slaves -> do
+    us <- getSelfPid
+    log $ "I am: " <> show us
+    log $ "Slaves: " <> show slaves
+    -- forM_ slaves $ \nid -> spawn nid ($(mkClosure 'slave))
+    terminateAllSlaves backend
   return ()

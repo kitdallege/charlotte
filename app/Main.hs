@@ -6,9 +6,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 module Main where
-import           Prelude                     (Eq, Foldable, Functor, IO, Int,
-                                              Integer, Ord, Show, String,
-                                              Traversable, filter, length, map,
+import           Prelude                     (Eq, IO, Int, Integer, Ord, Show,
+                                              String, filter, length, map,
                                               mapM_, print, return, round, show,
                                               succ, uncurry, ($), (.), (<),
                                               (<$>), (==))
@@ -44,11 +43,11 @@ Pages can then be rank'd via the # of other pages linking to them 'PageRank'.
 -}
 type Depth = Int
 type Ref = String
-data PageType a = Page Depth Ref a
-  deriving (Show, Eq, Ord, Functor, Foldable, Traversable)
+data PageType = Page Depth Ref
+  deriving (Show, Eq, Ord)
 
 data MetaTag = MetaTag {
-    metaTagRepr :: String
+    metaTagRepr  :: String
   , metaTagAttrs :: Map.Map String String
 } deriving (Show, Generic)
 
@@ -68,7 +67,7 @@ type ParseResult = Result PageType PageData
 siteMapSpider :: SpiderDefinition PageType PageData
 siteMapSpider = SpiderDefinition {
     _name = "site-map-generator"
-  , _startUrl = Page 1 "START" "http://local.lasvegassun.com/"
+  , _startUrl = (Page 1 "START", "http://local.lasvegassun.com/")
   , _extract = parse
   , _transform = Nothing -- Just pipeline
   , _load = Nothing
@@ -91,8 +90,12 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   timestamp <- show . (round :: POSIXTime -> Integer) <$> getPOSIXTime :: IO String
-  mainDb timestamp
-  --mainJson timestamp
+  -- mainDistributed
+  -- mainDb timestamp
+  mainJson timestamp
+
+mainDistributed :: IO ()
+mainDistributed = runSpiderDistributed siteMapSpider
 
 mainJson :: String -> IO ()
 mainJson filenamePart =
@@ -107,8 +110,29 @@ mainDb filenamePart =
     mapM_ (execute_ conn) createTableStmts
     runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
 
-parse :: PageType Response -> [ParseResult]
-parse (Page depth ref resp) = let
+-- Currently:
+--   parse :: PageType Response -> [ParseResult]
+--   parse (Page depth ref resp) = let
+-- thinking of:
+--   parse :: PageType -> Response -> [ParseResult]
+--   parse (Page depth ref) resp = ...
+-- I'm liking this more. It leaves the user-defined-type as
+-- a tag that can be as complex/simple as desired. We just carry it along
+-- during the process. (atm: Were making the user-defined-type a container
+-- and then shoving whatever were working on in it). This puts a lot of
+-- burden on the user to derive a kitchen sink worth of classes:
+-- eg: (Show, Eq, Ord, Functor, Foldable, Traversable)
+-- I can always stick this into a tuple to carry it around and recover back out
+-- what i need with code working on a tuple (which is a lot more well understood)
+-- than some user-defined-derived type.
+--
+-- parse :: (PageType, Response) -> [ParseResult]
+-- parse ((Page depth ref), resp) = ...
+-- This tuple'd style was the one originally mentioned in the reddit post that
+-- got me thinking about this crap again... :)
+
+parse :: PageType -> Response -> [ParseResult]
+parse (Page depth ref) resp = let
   nextDepth = succ depth
   tagTree = parseTagTree resp
   links = parseLinks tagTree
@@ -116,7 +140,7 @@ parse (Page depth ref resp) = let
   metaTags = parseMetaTags tagTree
   responsePath = URI.uriPath $ Response.uri resp
   reqs = catMaybes $ Request.mkRequest <$> map show links
-  results = map (Request . Page nextDepth responsePath) reqs
+  results = map (\r->Request $ (Page nextDepth responsePath, r)) reqs
   items = [Item $ PageData responsePath linkPaths depth ref metaTags]
   in if depth < maxDepth then results <> items else items
 
