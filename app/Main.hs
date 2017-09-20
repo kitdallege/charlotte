@@ -17,7 +17,6 @@ import           Data.Maybe                  (Maybe (..), catMaybes, mapMaybe)
 import           Data.Semigroup              ((<>))
 import           Data.Time.Clock.POSIX       (POSIXTime, getPOSIXTime)
 import           GHC.Generics                (Generic)
-import           Data.Binary                 (Binary)
 import           System.IO                   (BufferMode (..), Handle,
                                               IOMode (..), hSetBuffering,
                                               stdout, withFile)
@@ -43,8 +42,6 @@ type Depth = Int
 type Ref = String
 data PageType = Page Depth Ref
   deriving (Show, Eq, Ord, Generic)
-
-instance Binary PageType
 
 data MetaTag = MetaTag {
     metaTagRepr  :: !String
@@ -84,18 +81,15 @@ crawlHostURI :: URI
 Just crawlHostURI = URI.parseURI "http://local.lasvegassun.com"
 
 maxDepth :: Int
-maxDepth = 4
+maxDepth = 2
 
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
-  -- timestamp <- show . (round :: POSIXTime -> Integer) <$> getPOSIXTime :: IO String
-  mainDistributed
-  -- mainDb timestamp
+  timestamp <- show . (round :: POSIXTime -> Integer) <$> getPOSIXTime :: IO String
+  mainDb timestamp
   -- mainJson timestamp
 
-mainDistributed :: IO ()
-mainDistributed = runSpiderDistributed siteMapSpider
 
 mainJson :: String -> IO ()
 mainJson filenamePart =

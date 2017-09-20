@@ -37,18 +37,10 @@ resolver: lts-8.24
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - .
-- location:
-    git: git@github.com:haskell-distributed/distributed-process-supervisor.git
-    commit: 644a8614c2952a7820b067532e10a55726879c8b
-  extra-dep: true
-
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- distributed-process-async-0.2.4
-- distributed-process-client-server-0.2.3
-- distributed-process-extras-0.3.2
-- rematch-0.2.0.0
+- concurrent-machines-0.3.1
 - tagsoup-0.13.10
 - tagsoup-selection-0.1.0.1
 

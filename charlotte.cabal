@@ -23,11 +23,6 @@ library
                      , binary
                      , bytestring
                      , containers
-                     , distributed-process-supervisor
-                     , distributed-process
-                     , distributed-process-extras
-                     , distributed-process-client-server
-                     , distributed-process-simplelocalnet
                      , network-transport
                      , exceptions
                      , http-client
