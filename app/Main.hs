@@ -1,7 +1,4 @@
-{-# LANGUAGE DeriveFoldable    #-}
-{-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
@@ -20,6 +17,7 @@ import           Data.Maybe                  (Maybe (..), catMaybes, mapMaybe)
 import           Data.Semigroup              ((<>))
 import           Data.Time.Clock.POSIX       (POSIXTime, getPOSIXTime)
 import           GHC.Generics                (Generic)
+import           Data.Binary                 (Binary)
 import           System.IO                   (BufferMode (..), Handle,
                                               IOMode (..), hSetBuffering,
                                               stdout, withFile)
@@ -44,19 +42,21 @@ Pages can then be rank'd via the # of other pages linking to them 'PageRank'.
 type Depth = Int
 type Ref = String
 data PageType = Page Depth Ref
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Generic)
+
+instance Binary PageType
 
 data MetaTag = MetaTag {
-    metaTagRepr  :: String
-  , metaTagAttrs :: Map.Map String String
+    metaTagRepr  :: !String
+  , metaTagAttrs :: !(Map.Map String String)
 } deriving (Show, Generic)
 
 data PageData = PageData {
-    pagePath  :: String
-  , pageLinks :: [String]
-  , pageDepth :: Int
-  , pageRef   :: String
-  , pageMeta  :: [MetaTag]
+    pagePath  :: !String
+  , pageLinks :: ![String]
+  , pageDepth :: !Int
+  , pageRef   :: !String
+  , pageMeta  :: ![MetaTag]
 } deriving (Show, Generic)
 
 instance ToJSON MetaTag
@@ -89,10 +89,10 @@ maxDepth = 2
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
-  timestamp <- show . (round :: POSIXTime -> Integer) <$> getPOSIXTime :: IO String
-  -- mainDistributed
+  -- timestamp <- show . (round :: POSIXTime -> Integer) <$> getPOSIXTime :: IO String
+  mainDistributed
   -- mainDb timestamp
-  mainJson timestamp
+  -- mainJson timestamp
 
 mainDistributed :: IO ()
 mainDistributed = runSpiderDistributed siteMapSpider
@@ -140,7 +140,7 @@ parse (Page depth ref) resp = let
   metaTags = parseMetaTags tagTree
   responsePath = URI.uriPath $ Response.uri resp
   reqs = catMaybes $ Request.mkRequest <$> map show links
-  results = map (\r->Request $ (Page nextDepth responsePath, r)) reqs
+  results = map (\r->Request (Page nextDepth responsePath, r)) reqs
   items = [Item $ PageData responsePath linkPaths depth ref metaTags]
   in if depth < maxDepth then results <> items else items
 

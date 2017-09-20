@@ -2,6 +2,8 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Charlotte (
     SpiderDefinition(..)
   , Result(..)
@@ -18,12 +20,14 @@ import           Prelude                                            (Bool (..),
                                                                      Maybe (..),
                                                                      Show (..),
                                                                      String,
+                                                                     Int,
                                                                      const,
                                                                      filter,
+                                                                     map,
                                                                      fst,
                                                                      length,
                                                                      mapM_, not,
-                                                                     putStrLn,
+                                                                     putStr, putStrLn,
                                                                      print,
                                                                      realToFrac,
                                                                      return,
@@ -31,13 +35,16 @@ import           Prelude                                            (Bool (..),
                                                                      (&&), (&&),
                                                                      (.), (/),
                                                                      (/=), (<),
-                                                                     (<$>),
+                                                                     (<$>), (>>),
                                                                      (<=), (>))
 -- import           Debug.Trace
 --- Cloud Stuffs
-import           Control.Distributed.Process
+import qualified Control.Distributed.Process as Cloud
 import           Control.Distributed.Process.Backend.SimpleLocalnet
-import           Control.Distributed.Process.Node                   (initRemoteTable)
+import  qualified Control.Distributed.Process.Node                   as Cloud
+import qualified Control.Distributed.Process.Internal.Closure.TH as Cloud
+import Control.Distributed.Process.Supervisor hiding (start, shutdown)
+import qualified Control.Distributed.Process.Supervisor as Supervisor
 ---
 import           Control.Concurrent                                 (forkIO,
                                                                      threadDelay)
@@ -195,7 +202,7 @@ runSpider spiderDef = do
   putStrLn $ "============ START " <> show startTime <> " ============"
   let startReq = Request.mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
-      transform = fromMaybe return $_transform spiderDef
+      transform = fromMaybe return $ _transform spiderDef
       load = fromMaybe (const (return ())) $ _load spiderDef
 
   -- bail if there is nothing to do.
@@ -241,16 +248,54 @@ runSpider spiderDef = do
   return ()
 
 
+testChild :: Cloud.Process ()
+testChild = forever $ Cloud.receiveWait [Cloud.match printInt]
+
+
+printInt :: Int -> Cloud.Process ()
+printInt !n = Cloud.say $ "n = " <> show n
+
+$(Cloud.remotable ['testChild])
+
+remoteTable :: Cloud.RemoteTable
+remoteTable = __remoteTable Cloud.initRemoteTable
 
 
 runSpiderDistributed :: (Show f, Show b) => SpiderDefinition f b -> IO ()
 runSpiderDistributed spiderDef = do
   log $ _name spiderDef
-  backend <- initializeBackend "127.0.0.1" "9000" initRemoteTable
-  startMaster backend $ \slaves -> do
-    us <- getSelfPid
-    log $ "I am: " <> show us
-    log $ "Slaves: " <> show slaves
+  backend <- initializeBackend "localhost" "9000" remoteTable
+  node <- newLocalNode backend
+  Cloud.runProcess node $ do
+    self <- Cloud.getSelfPid
+    Cloud.say $ "Hello from " <> show self
+    cStart <- toChildStart ($(Cloud.mkStaticClosure 'testChild))
+    let workerSpec = ChildSpec
+          {
+            childKey     = "worker"
+          , childType    = Worker
+          , childRestart = Temporary
+          , childRestartDelay = Nothing
+          , childStop    = StopImmediately
+          , childStart   = cStart
+          , childRegName = Just (Supervisor.LocalName "giraffe")
+          }
+    sup <- Supervisor.start (Supervisor.RestartOne Supervisor.defaultLimits) Supervisor.ParallelShutdown [workerSpec]
+    -- (Supervisor.ChildAdded (Supervisor.ChildRunning cid)) <- Supervisor.startNewChild sup workerSpec
+    -- log $ "running child: " <> show cid
+    children <- Supervisor.listChildren sup
+    let cids = [p | (Supervisor.ChildRunning p) <- filter Supervisor.isRunning $ map fst children]
+    Cloud.say $ "sup children: " <> show children
+    Cloud.say $ "sup cids: " <> show cids
+    forM_ [0..5] $ \n -> do
+      liftIO $ threadDelay 2000000
+      Cloud.say $ "sending: " <> show n
+      forM_ cids $ \cid -> Cloud.send cid (n::Int)
+    Cloud.say $ "Going down now: " <> show sup
+    -- Supervisor.shutdownAndWait self
+  -- log "Supervisor down now the localNode itself"
+  liftIO $ threadDelay 2000000
+  Cloud.closeLocalNode node
+  log "Local Node Down."
     -- forM_ slaves $ \nid -> spawn nid ($(mkClosure 'slave))
-    terminateAllSlaves backend
   return ()

@@ -20,13 +20,15 @@ library
                        Charlotte.Request
                        Charlotte.Types
   build-depends:       base >= 4.7 && < 5
+                     , binary
                      , bytestring
                      , containers
+                     , distributed-process-supervisor
                      , distributed-process
-                     , distributed-process-async
                      , distributed-process-extras
                      , distributed-process-client-server
                      , distributed-process-simplelocalnet
+                     , network-transport
                      , exceptions
                      , http-client
                      , http-client-tls
@@ -45,6 +47,7 @@ executable charlotte-exe
   build-depends:       base
                      , charlotte
                      , aeson
+                     , binary
                      , bytestring
                      , containers
                      , network-uri
