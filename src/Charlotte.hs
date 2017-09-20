@@ -2,8 +2,6 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE TemplateHaskell #-}
 module Charlotte (
     SpiderDefinition(..)
   , Result(..)
@@ -12,62 +10,38 @@ module Charlotte (
   , runSpider
   , Request.mkRequest
 ) where
-import           Prelude                                            (Bool (..),
-                                                                     Double,
-                                                                     Either (..),
-                                                                     IO,
-                                                                     Maybe (..),
-                                                                     Show (..),
-                                                                     String,
-                                                                     const,
-                                                                     filter,
-                                                                     fst,
-                                                                     length,
-                                                                     mapM_, not,
-                                                                     putStrLn,
-                                                                     print,
-                                                                     realToFrac,
-                                                                     return,
-                                                                     snd, ($),
-                                                                     (&&), (&&),
-                                                                     (.), (/),
-                                                                     (/=), (<),
-                                                                     (<$>), (<=),
-                                                                     (>))
+import           Prelude                    (Bool (..), Double, Either (..), IO,
+                                             Maybe (..), Show (..), String,
+                                             const, filter, fst, length, mapM_,
+                                             not, print, putStrLn, realToFrac,
+                                             return, snd, ($), (&&), (&&), (.),
+                                             (/), (/=), (<), (<$>), (<=), (>))
 -- import           Debug.Trace
-import           Control.Concurrent                                 (forkIO,
-                                                                     threadDelay)
+import           Control.Concurrent         (forkIO, threadDelay)
 import           Control.Concurrent.STM
-import qualified Control.Exception                                  as E
-import           Control.Monad                                      (forever,
-                                                                     mapM,
-                                                                     replicateM_,
-                                                                     void, when,
-                                                                     (>>=))
-import           Control.Monad.IO.Class                             (MonadIO,
-                                                                     liftIO)
-import qualified Data.ByteString                                    as BS
-import qualified Data.ByteString.Lazy.Char8                         as BSL8
-import           Data.Either                                        (isRight)
-import           Data.Foldable                                      as F
-import           Data.Maybe                                         (fromJust,
-                                                                     fromMaybe,
-                                                                     isNothing,
-                                                                     mapMaybe)
-import           Data.Semigroup                                     ((<>))
-import qualified Data.Set                                           as S
-import           Data.Time                                          (diffUTCTime,
-                                                                     getZonedTime,
-                                                                     zonedTimeToUTC)
-import qualified Network.HTTP.Client                                as C
-import           Network.HTTP.Client.TLS                            (tlsManagerSettings)
-import           Network.HTTP.Types                                 as NT
-import qualified Network.URI                                        as URI
+import qualified Control.Exception          as E
+import           Control.Monad              (forever, mapM, replicateM_, void,
+                                             when, (>>=))
+import           Control.Monad.IO.Class     (MonadIO, liftIO)
+import qualified Data.ByteString            as BS
+import qualified Data.ByteString.Lazy.Char8 as BSL8
+import           Data.Either                (isRight)
+import           Data.Foldable              as F
+import           Data.Maybe                 (fromJust, fromMaybe, isNothing,
+                                             mapMaybe)
+import           Data.Semigroup             ((<>))
+import qualified Data.Set                   as S
+import           Data.Time                  (diffUTCTime, getZonedTime,
+                                             zonedTimeToUTC)
+import qualified Network.HTTP.Client        as C
+import           Network.HTTP.Client.TLS    (tlsManagerSettings)
+import           Network.HTTP.Types         as NT
+import qualified Network.URI                as URI
 
-import           Charlotte.Request                                  (Request)
-import qualified Charlotte.Request                                  as Request
-import           Charlotte.Response                                 (Response)
-import qualified Charlotte.Response                                 as Response
+import           Charlotte.Request          (Request)
+import qualified Charlotte.Request          as Request
+import           Charlotte.Response         (Response)
+import qualified Charlotte.Response         as Response
 import           Charlotte.Types
 
 data Result a b =
@@ -94,7 +68,7 @@ resultGetItem  (Item r) = Just r
 resultGetItem _         = Nothing
 
 data SpiderDefinition a b = SpiderDefinition {
-    _name      :: String
+    _name      :: !String
   , _startUrl  :: (a, String)                              -- source
   , _extract   :: a -> Response -> [Result a b]               -- extract
   , _transform :: Maybe (b -> IO b)   -- transform

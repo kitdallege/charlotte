@@ -104,27 +104,6 @@ mainDb filenamePart =
     mapM_ (execute_ conn) createTableStmts
     runSpider siteMapSpider {_load = Just (loadSqliteDb conn)}
 
--- Currently:
---   parse :: PageType Response -> [ParseResult]
---   parse (Page depth ref resp) = let
--- thinking of:
---   parse :: PageType -> Response -> [ParseResult]
---   parse (Page depth ref) resp = ...
--- I'm liking this more. It leaves the user-defined-type as
--- a tag that can be as complex/simple as desired. We just carry it along
--- during the process. (atm: Were making the user-defined-type a container
--- and then shoving whatever were working on in it). This puts a lot of
--- burden on the user to derive a kitchen sink worth of classes:
--- eg: (Show, Eq, Ord, Functor, Foldable, Traversable)
--- I can always stick this into a tuple to carry it around and recover back out
--- what i need with code working on a tuple (which is a lot more well understood)
--- than some user-defined-derived type.
---
--- parse :: (PageType, Response) -> [ParseResult]
--- parse ((Page depth ref), resp) = ...
--- This tuple'd style was the one originally mentioned in the reddit post that
--- got me thinking about this crap again... :)
-
 parse :: PageType -> Response -> [ParseResult]
 parse (Page depth ref) resp = let
   nextDepth = succ depth
