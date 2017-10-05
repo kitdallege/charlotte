@@ -1,0 +1,66 @@
+name: charlotte
+version: '0.1.0.0'
+category: Web
+author: Kit Dallege
+maintainer: kitdallege@gmail.com
+copyright: ! 'Copyright: (c) 2016 Kit Dallege'
+license: BSD3
+github: kitdallege/charlotte
+extra-source-files:
+- README.md
+library:
+  source-dirs: src
+  ghc-options: -Wall
+  exposed-modules:
+  - Charlotte
+  - Charlotte.Response
+  - Charlotte.Request
+  - Charlotte.Types
+  dependencies:
+  - base >=4.7 && <5
+  - binary
+  - bytestring
+  - containers
+  - network-transport
+  - exceptions
+  - http-client
+  - http-client-tls
+  - http-types
+  - network-uri
+  - stm
+  - time
+  - text
+executables:
+  charlotte-exe:
+    main: Main.hs
+    source-dirs: app
+    ghc-options:
+    - -Wall
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -O2
+    dependencies:
+    - base
+    - charlotte
+    - aeson
+    - binary
+    - bytestring
+    - containers
+    - network-uri
+    - sqlite-simple
+    - time
+    - tagsoup
+    - tagsoup-selection
+tests:
+  charlotte-test:
+    main: Spec.hs
+    source-dirs: test
+    ghc-options:
+    - -Wall
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - base
+    - charlotte

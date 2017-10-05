@@ -1,8 +1,11 @@
+-- This file has been generated from package.yaml by hpack version 0.17.1.
+--
+-- see: https://github.com/sol/hpack
+
 name:                charlotte
 version:             0.1.0.0
--- synopsis:
--- description:
 homepage:            https://github.com/kitdallege/charlotte#readme
+bug-reports:         https://github.com/kitdallege/charlotte/issues
 license:             BSD3
 license-file:        LICENSE
 author:              Kit Dallege
@@ -10,57 +13,68 @@ maintainer:          kitdallege@gmail.com
 copyright:           Copyright: (c) 2016 Kit Dallege
 category:            Web
 build-type:          Simple
-extra-source-files:  README.md
-cabal-version:       >=1.10
+cabal-version:       >= 1.10
 
-library
-  hs-source-dirs:      src
-  exposed-modules:     Charlotte
-                       Charlotte.Response
-                       Charlotte.Request
-                       Charlotte.Types
-  build-depends:       base >= 4.7 && < 5
-                     , binary
-                     , bytestring
-                     , containers
-                     , network-transport
-                     , exceptions
-                     , http-client
-                     , http-client-tls
-                     , http-types
-                     , network-uri
-                     , stm
-                     , time
-                     , text
-  ghc-options:         -Wall
-  default-language:    Haskell2010
-
-executable charlotte-exe
-  hs-source-dirs:      app
-  main-is:             Main.hs
-  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N -O2
-  build-depends:       base
-                     , charlotte
-                     , aeson
-                     , binary
-                     , bytestring
-                     , containers
-                     , network-uri
-                     , sqlite-simple
-                     , time
-                     , tagsoup
-                     , tagsoup-selection
-  default-language:    Haskell2010
-
-test-suite charlotte-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
-  build-depends:       base
-                     , charlotte
-  ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
-  default-language:    Haskell2010
+extra-source-files:
+    README.md
 
 source-repository head
-  type:     git
+  type: git
   location: https://github.com/kitdallege/charlotte
+
+library
+  hs-source-dirs:
+      src
+  exposed-modules:
+      Charlotte
+      Charlotte.Response
+      Charlotte.Request
+      Charlotte.Types
+  other-modules:
+      Paths_charlotte
+  build-depends:
+      base >=4.7 && <5
+    , binary
+    , bytestring
+    , containers
+    , network-transport
+    , exceptions
+    , http-client
+    , http-client-tls
+    , http-types
+    , network-uri
+    , stm
+    , time
+    , text
+  ghc-options: -Wall
+  default-language: Haskell2010
+
+executable charlotte-exe
+  hs-source-dirs:
+      app
+  main-is: Main.hs
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N -O2
+  build-depends:
+      base
+    , charlotte
+    , aeson
+    , binary
+    , bytestring
+    , containers
+    , network-uri
+    , sqlite-simple
+    , time
+    , tagsoup
+    , tagsoup-selection
+  default-language: Haskell2010
+
+test-suite charlotte-test
+  type: exitcode-stdio-1.0
+  hs-source-dirs:
+      test
+  main-is: Spec.hs
+  build-depends:
+      base
+    , charlotte
+  ghc-options: -Wall -threaded -rtsopts -with-rtsopts=-N
+  default-language: Haskell2010

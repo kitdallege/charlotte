@@ -2,6 +2,20 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_HADDOCK show-extensions #-}
+{-|
+Module      : Charlotte
+Description : Short description
+Copyright   : (c) Some Guy, 2013
+                  Someone Else, 2014
+License     : BSD3 (see the file LICENSE)
+Maintainer  : Kit Dallege <kitdallege@gmail.com>
+Stability   : experimental
+Portability : POSIX
+
+Here is a longer description of this module, containing some
+commentary with @some markup@.
+-}
 module Charlotte (
     SpiderDefinition(..)
   , Result(..)
@@ -80,22 +94,23 @@ data SpiderDefinition a b = SpiderDefinition {
 log :: (MonadIO m) => String -> m ()
 log str = liftIO $ putStrLn str
 
-pipeline :: TQueue [b] -> (b -> IO b) -> (b -> IO ()) -> IO ()
+pipeline :: JobQueue [b] -> (b -> IO b) -> (b -> IO ()) -> IO ()
 pipeline inBox transform load = forever loop
   where
     loop = do
       log "== pipeline get items =="
-      items <- atomically $ readTQueue inBox
+      items <- atomically $ readJobQueue inBox
       log "pipeline got items"
       items' <- mapM transform items
       log "pipeline transformed items"
       E.catch (mapM_ load items') (print :: E.SomeException -> IO())
+      _ <- atomically $ taskCompleteJobQueue inBox
       log "== pipeline loaded items =="
 
 workerWrapper :: Show a =>
   C.Manager ->
   JobQueue (a, Request) ->
-  TQueue [b1] ->
+  JobQueue [b1] ->
   (a -> Response -> [Result a b1]) ->
   TVar (S.Set String) ->
   IO b
@@ -118,7 +133,7 @@ workerWrapper manager inBox outBox extract seen = forever loop
           log $ "workerWrapper: (" <> show (length items) <> ") items."
           log $ "workerWrapper: (" <> show (length reqs) <> ") requests."
           atomically $ do
-            writeTQueue outBox items
+            writeJobQueue outBox items
             mapM_ (writeJobQueue inBox) reqs
             taskCompleteJobQueue inBox
           log "workerWrapper: response wrote to outBox"
@@ -172,10 +187,12 @@ runSpider spiderDef = do
   when (F.any isNothing startReq) (return ())
   let startReq' = fromJust <$> startReq
   -- use a set to record/filter seen requests so we don't dl something > 1
+  -- TODO: explore bytestring-trie to reduce the overhead of storing
+  -- large numbers of urls in memory.
   seen   <- newTVarIO S.empty :: IO (TVar (S.Set String))
   -- Spin up the downloader worker threads
   workerInBox <- newJobQueueIO -- :: IO (JobQueue (f Request))
-  workerOutBox <- newTQueueIO  -- :: IO (TQueue (f Result )))
+  workerOutBox <- newJobQueueIO  -- :: IO (TQueue (f Result )))
   manager <- C.newManager tlsManagerSettings {
       C.managerResponseTimeout = C.responseTimeoutMicro 60000000
     , C.managerModifyRequest = \req->return $ req {
@@ -196,8 +213,8 @@ runSpider spiderDef = do
   log "WorkerInBox not active."
   threadDelay 20000
   atomically $ do
-    drained <- isEmptyTQueue workerOutBox
-    check drained
+    active <- isActiveJobQueue workerOutBox
+    check (not active)
   log "workerOutBox is empty."
   endTime <- getZonedTime
   threadDelay 20000 -- hope that the pipeline tasks finish up TODO: Real solution
