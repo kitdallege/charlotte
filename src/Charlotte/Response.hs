@@ -1,3 +1,4 @@
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Charlotte.Response (
     Response
@@ -10,7 +11,8 @@ module Charlotte.Response (
   , statusCode
   , body
 ) where
-import qualified Data.ByteString.Lazy.Char8 as BSL8
+import ClassyPrelude
+-- import qualified Data.ByteString.Lazy.Char8 as BSL8
 import qualified Data.Map.Strict            as Map
 import qualified Network.HTTP.Client        as C
 import qualified Network.HTTP.Types         as NT
@@ -22,12 +24,12 @@ import           Charlotte.Types            (Flag, Meta)
 data Response = Response {
     uri              :: URI.URI
   , request          :: Request -- Charlotte.Request ?
-  , originalResponse :: C.Response BSL8.ByteString
+  , originalResponse :: C.Response LByteString
   , meta             :: Meta
   , flags            :: [Flag]
 } deriving (Show)
 
-mkResponse :: URI -> Request -> C.Response BSL8.ByteString -> Response
+mkResponse :: URI -> Request -> C.Response LByteString -> Response
 mkResponse uri' req resp = Response {
     uri = uri'
   , request = req
@@ -42,6 +44,6 @@ statusCode     :: Response -> Int
 statusCode = NT.statusCode . C.responseStatus . originalResponse
 -- responseVersion    :: Response -> NT.HttpVersion
 -- responseHeaders    :: Response -> NT.RequestHeaders
-body       :: Response -> BSL8.ByteString
+body       :: Response -> LByteString
 body = C.responseBody . originalResponse
 -- responseCookieJar  :: Response -> NT.CookieJar

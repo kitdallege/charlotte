@@ -18,10 +18,8 @@ library:
   - Charlotte.Types
   dependencies:
   - base >=4.7 && <5
-  - binary
-  - bytestring
+  - classy-prelude
   - containers
-  - network-transport
   - exceptions
   - http-client
   - http-client-tls
@@ -29,7 +27,6 @@ library:
   - network-uri
   - stm
   - time
-  - text
 executables:
   charlotte-exe:
     main: Main.hs
@@ -43,12 +40,16 @@ executables:
     dependencies:
     - base
     - charlotte
+    - classy-prelude
+    - async
     - aeson
-    - binary
     - bytestring
+    - binary
     - containers
     - network-uri
+    - stm
     - sqlite-simple
+    - text
     - time
     - tagsoup
     - tagsoup-selection

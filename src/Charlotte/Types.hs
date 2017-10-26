@@ -1,3 +1,4 @@
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Charlotte.Types (
     Meta
@@ -11,9 +12,10 @@ module Charlotte.Types (
   , isActiveJobQueue
   , taskCompleteJobQueue
 ) where
+import ClassyPrelude
 import           Data.Dynamic               (Dynamic)
-import           Data.Map.Strict            (Map)
-import           Control.Concurrent.STM
+-- import           Data.Map.Strict            (Map)
+-- import           Control.Concurrent.STM
 import           Data.Typeable              (Typeable)
 
 type Meta = Map String Dynamic

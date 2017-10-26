@@ -1,3 +1,5 @@
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Charlotte.Request (
     Request
   , mkRequest
@@ -5,6 +7,7 @@ module Charlotte.Request (
   , uri
 
 ) where
+import ClassyPrelude
 import qualified Data.Map.Strict     as Map
 import qualified Data.Typeable       as T (Typeable)
 import qualified Network.HTTP.Client as C
@@ -19,14 +22,14 @@ data Request = Request {
   , flags           :: [Flag]
 } deriving (Show, T.Typeable)
 
-mkRequest :: String -> Maybe Request
+mkRequest :: Text -> Maybe Request
 mkRequest url = do
-  let uri' = URI.parseURI url
+  let uri' = URI.parseURI (unpack url)
   case uri' of
     Nothing -> Nothing
     Just uri'' -> Just Request {
         uri = uri''
-      , internalRequest = (C.parseRequest_ url) {C.responseTimeout = C.responseTimeoutMicro 60000000}
+      , internalRequest = (C.parseRequest_ (unpack url)) {C.responseTimeout = C.responseTimeoutMicro 60000000}
       , meta = Map.empty
       , flags = []
       }
