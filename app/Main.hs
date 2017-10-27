@@ -1,36 +1,18 @@
 {-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
 module Main where
 import ClassyPrelude
--- import           Prelude                     (Eq, IO, Int, Integer, Ord, Show,
---                                               String, filter, length, map,
---                                               mapM_, print, return, round, show,
---                                               succ, uncurry, ($), (.), (<),
---                                               (<$>), (==), Either(..), Bool(..), Maybe(..), drop, (&&), not, zip, fst)
--- import Data.Maybe (catMaybes, mapMaybe)
--- import Data.Semigroup ((<>))
--- import Control.Monad (join)
 import           Data.Aeson.Text
 import           Data.Aeson.Types hiding (parse, Result)
--- import Control.Concurrent.Async
 import qualified Data.Char                  as Char
--- import Data.Text (Text)
--- import qualified Data.Text as T
--- import qualified Data.Text.Lazy as TL
--- import Data.Text.Encoding (encodeUtf8)
--- import           Control.Concurrent.STM
 import Control.Concurrent.Async (waitBoth)
--- import Data.ByteString (ByteString)
 import Data.ByteString             (breakSubstring)
--- import qualified Data.ByteString.Char8       as BS8
--- import qualified Data.ByteString.Lazy.Char8  as BSL
 import           Network.URI                 (URI (..))
 import qualified Network.URI                 as URI
 import           Text.HTML.TagSoup           (parseTags)
-import           Text.StringLike (StringLike)
-import qualified Text.StringLike as TS
+-- import           Text.StringLike (StringLike)
+-- import qualified Text.StringLike as TS
 import           Text.HTML.TagSoup.Selection as TS
 import           Text.HTML.TagSoup.Tree      (TagTree)
 import Text.StringLike.Matchable (Matchable(..))
@@ -53,9 +35,12 @@ checkNull null' comp s1 s2 = not (null' s1) && comp s1 s2
 
 newtype MatchableText = MatchableText {unMatchableText :: Text} deriving (Show)
 
--- instance StringLike MatchableText where
---     uncons x = (,) . fst <*> (MatchableText $ snd) <$> uncons $ unMatchableText x
---     toString = unpack . unMatchableText
+-- instance StringLike  where
+--     TODO: I'm pretty sure this unwrap/wrap is a Profunctor
+--     figure out if I'm right. if so, badass.
+--     uncons = second MatchableText <$> (uncons . unMatchableText)
+--     uncons (MatchableText t) = (,) . fst <*> (MatchableText $ snd) <$> uncons t
+--     toString MatchableText t) = MatchableText (unpack t)
 --     fromChar = singleton . unMatchableText
 --     strConcat = concat . unMatchableText
 --     empty = MatchableText ""
