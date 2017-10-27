@@ -27,11 +27,7 @@ library
       src
   exposed-modules:
       Charlotte
-      Charlotte.Response
-      Charlotte.Request
       Charlotte.Types
-  other-modules:
-      Paths_charlotte
   build-depends:
       base >=4.7 && <5
     , classy-prelude

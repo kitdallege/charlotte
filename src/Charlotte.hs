@@ -17,13 +17,9 @@ Here is a longer description of this module, containing some
 commentary with @some markup@.
 -}
 module Charlotte (
-    SpiderDefinition(..)
-  , Result(..)
-  , Response
-  , Request
-  , runSpider
-  , Request.mkRequest
-) where
+      module Charlotte.Types
+    , runSpider
+    ) where
 import ClassyPrelude
 -- import           Prelude                    (Bool (..), Double, Either (..), IO,
 --                                              Maybe (..), Show (..), String,
@@ -54,42 +50,8 @@ import           Network.HTTP.Client.TLS    (tlsManagerSettings)
 import           Network.HTTP.Types         as NT
 import qualified Network.URI                as URI
 
-import           Charlotte.Request          (Request)
-import qualified Charlotte.Request          as Request
-import           Charlotte.Response         (Response)
-import qualified Charlotte.Response         as Response
 import           Charlotte.Types
 
-data Result a b =
-    Request (a, Request)
-  | Item  b
-
-instance (Show a, Show b) => Show (Result a b) where
-  show (Request (_, r)) = "Result Request (" <> show r <> ")"
-  show (Item i)         = "Result " <> show i
-
-resultIsItem :: Result a b -> Bool
-resultIsItem (Item _)    = True
-resultIsItem (Request _) = False
-
-resultIsRequest :: Result a b -> Bool
-resultIsRequest = not . resultIsItem
-
-resultGetRequest :: Result a b -> Maybe (a, Request)
-resultGetRequest (Request r) = Just r
-resultGetRequest _           = Nothing
-
-resultGetItem  :: Result a b -> Maybe b
-resultGetItem  (Item r) = Just r
-resultGetItem _         = Nothing
-
-data SpiderDefinition a b = SpiderDefinition {
-    _name      :: !Text
-  , _startUrl  :: (a, Text)                              -- source
-  , _extract   :: a -> Response -> [Result a b]               -- extract
-  , _transform :: Maybe (b -> IO b)   -- transform
-  , _load      :: Maybe (b -> IO ())                -- load
-}
 
 ------ new stuff -----------
 
@@ -111,9 +73,9 @@ pipeline inBox transform load = forever loop
 
 workerWrapper :: Show a =>
   C.Manager ->
-  JobQueue (a, Request) ->
+  JobQueue (a, CharlotteRequest) ->
   JobQueue [b1] ->
-  (a -> Response -> [Result a b1]) ->
+  (a -> CharlotteResponse -> [Result a b1]) ->
   TVar (Set ByteString) ->
   IO b
 workerWrapper manager inBox outBox extract seen = forever loop
@@ -141,15 +103,15 @@ workerWrapper manager inBox outBox extract seen = forever loop
           log' "workerWrapper: response wrote to outBox"
       return ()
 
-makeRequest' :: C.Manager -> TVar (Set ByteString) -> Request -> IO (Either Text Response)
+makeRequest' :: C.Manager -> TVar (Set ByteString) -> CharlotteRequest -> IO (Either Text CharlotteResponse)
 makeRequest' manager seen req = do
-  let req' = Request.internalRequest req
-      uri = fromString $ URI.uriPath $ Request.uri req
+  let req' = requestInternalRequest req
+      uri = fromString $ URI.uriPath $ requestUri req
   seen' <- atomically $ readTVar seen
   let duplicate = member uri seen'
   if not duplicate then do
     atomically $ writeTVar seen (insertSet uri seen')
-    log' $ pack $ "makeRequest: Requesting: " <> show (Request.uri req)
+    log' $ pack $ "makeRequest: Requesting: " <> show (requestUri req)
     resp <- E.try $ C.withResponseHistory req' manager $ \hr -> do
         let orginhost = C.host req'
             finalReq = C.hrFinalRequest hr
@@ -164,13 +126,13 @@ makeRequest' manager seen req = do
             "The response host does not match that of the request's."
         bss <- C.brConsume $ C.responseBody res
         return res { C.responseBody = fromChunks bss }
-    log' $ pack $ (if isRight resp then "makeRequest: Success " else "makeRequest: Error ") <> show (Request.uri req)
+    log' $ pack $ (if isRight resp then "makeRequest: Success " else "makeRequest: Error ") <> show (requestUri req)
     case resp of
       Left e -> return $ Left $ pack $ show  (e :: C.HttpException)
       Right r ->
         let code = NT.statusCode (C.responseStatus r) in
           if 200 <= code && code < 300 then
-            return (Right $ Response.mkResponse (Request.uri req) req r)
+            return (Right $ mkResponse (requestUri req) req r)
             else
               return $ Left $ pack ("StatusCodeException: code=" <> show code <> " returned.")
     else
@@ -180,7 +142,7 @@ runSpider :: (Show f, Show b) => SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
   startTime <- getZonedTime
   putStrLn $ pack $ "============ START " <> show startTime <> " ============"
-  let startReq = Request.mkRequest <$> _startUrl spiderDef
+  let startReq = mkRequest <$> _startUrl spiderDef
       extract = _extract spiderDef
       transform = fromMaybe return $ _transform spiderDef
       load = fromMaybe (const (return ())) $ _load spiderDef

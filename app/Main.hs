@@ -22,9 +22,9 @@ import           System.IO                   (BufferMode (..), hSetBuffering,
                                             stdout)
 import GHC.Generics (Generic)
 -- Library in the works
-import           Charlotte                   as C
-import qualified Charlotte.Request           as Request
-import qualified Charlotte.Response          as CResponse
+import           Charlotte
+-- import qualified Charlotte.Request           as Request
+-- import qualified Charlotte.Response          as CResponse
 
 linkSelector :: Selector
 Right linkSelector = parseSelector "a"
@@ -33,8 +33,7 @@ Right linkSelector = parseSelector "a"
 checkNull :: (s -> Bool) -> (s -> s -> Bool) -> (s -> s -> Bool)
 checkNull null' comp s1 s2 = not (null' s1) && comp s1 s2
 
-newtype MatchableText = MatchableText {unMatchableText :: Text} deriving (Show)
-
+-- newtype MatchableText = MatchableText {unMatchableText :: Text} deriving (Show)
 -- instance StringLike  where
 --     TODO: I'm pretty sure this unwrap/wrap is a Profunctor
 --     figure out if I'm right. if so, badass.
@@ -137,20 +136,20 @@ wfind uri depth patterns chan = do
   _ <- atomically $ writeTChan chan Nothing
   return ()
 
-parse :: Int -> [SearchPattern] -> URI -> PageType -> C.Response -> [Result PageType Match]
+parse :: Int -> [SearchPattern] -> URI -> PageType -> CharlotteResponse -> [Result PageType Match]
 parse maxDepth patterns crawlHostURI (ScrapedPage depth ref) resp = let
   nextDepth = succ depth
   tagTree = parseTagTree resp
   links = parseLinks crawlHostURI tagTree
-  responsePath = pack $ URI.uriPath $ CResponse.uri resp
-  reqs = catMaybes $ Request.mkRequest <$> map (pack . show) links
+  responsePath = pack $ URI.uriPath $ responseUri resp
+  reqs = catMaybes $ mkRequest <$> map (pack . show) links
   results = map (\r->Request (ScrapedPage nextDepth responsePath, r)) reqs
   items = map Item $ mapMaybe (performPatternMatch resp responsePath depth ref) patterns
   in if depth < maxDepth then results <> items else items
 
-performPatternMatch :: CResponse.Response -> Text -> Int -> Text -> SearchPattern -> Maybe Match
+performPatternMatch :: CharlotteResponse -> Text -> Int -> Text -> SearchPattern -> Maybe Match
 performPatternMatch resp curPath depth ref pat = do
-  let body = CResponse.body resp
+  let body = responseBody resp
       pat' = spPattern pat
       pat'' = encodeUtf8 pat' :: ByteString
       body' = toStrict body
@@ -171,9 +170,9 @@ mkMatchInfo pat body = let
     infoItems = [(i, colIndex txt) | (i, txt) <- linesWithIndexes]
   in [MatchInfo l c | (l, c) <- infoItems]
 
-parseTagTree :: C.Response -> [TagTree Text]
+parseTagTree :: CharlotteResponse -> [TagTree Text]
 parseTagTree resp = let
-  r = decodeUtf8 $ toStrict $ CResponse.body resp :: Text
+  r = decodeUtf8 $ toStrict $ responseBody resp :: Text
   tags = parseTags r
   in filter TS.isTagBranch $ TS.tagTree' tags
 

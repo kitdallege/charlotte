@@ -11,11 +11,6 @@ extra-source-files:
 library:
   source-dirs: src
   ghc-options: -Wall
-  exposed-modules:
-  - Charlotte
-  - Charlotte.Response
-  - Charlotte.Request
-  - Charlotte.Types
   dependencies:
   - base >=4.7 && <5
   - classy-prelude
