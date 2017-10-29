@@ -22,6 +22,7 @@ import           System.IO                   (BufferMode (..), hSetBuffering,
                                             stdout)
 import GHC.Generics (Generic)
 -- Library in the works
+import Lens.Micro.Platform
 import           Charlotte
 -- import qualified Charlotte.Request           as Request
 -- import qualified Charlotte.Response          as CResponse
@@ -94,13 +95,17 @@ instance ToJSON MatchInfo where
 siteSearchSpider :: SpiderDefinition PageType Match
 siteSearchSpider = let
   Just crawlHostURI = URI.parseURI "http://local.lasvegassun.com"
-  in SpiderDefinition
-  { _name = "wfind-spider"
-  , _startUrl = (ScrapedPage 1 "START", "http://local.lasvegassun.com")
-  , _extract = parse 0 [] crawlHostURI
-  , _transform = Nothing
-  , _load = Nothing
-  }
+  in defaultSpider (ScrapedPage 1 "START")
+            & name .~ "wfind-spider"
+            & startUrl .~ (ScrapedPage 1 "START", "http://local.lasvegassun.com")
+            & extract .~ parse 0 [] crawlHostURI
+  -- in SpiderDefinition {}
+  --  name = "wfind-spider"
+  -- , _startUrl = (ScrapedPage 1 "START", "http://local.lasvegassun.com")
+  -- , _extract = parse 0 [] crawlHostURI
+  -- , _transform = Nothing
+  -- , _load = Nothing
+  -- }
 
 main :: IO ()
 main = do
@@ -119,20 +124,20 @@ main = do
                 loop chan
 
 wfind :: Text -> Int -> [SearchPattern] -> TChan (Maybe Text) -> IO ()
-wfind uri depth patterns chan = do
+wfind uri' depth patterns chan = do
   hSetBuffering stdout LineBuffering
-  let suri = unpack uri
+  let suri = unpack uri'
       Just crawlHostURI = URI.parseURI suri
+      spider = siteSearchSpider
+            & startUrl .~ (ScrapedPage 1 "START", uri')
+            & extract .~ parse depth patterns crawlHostURI
+            & load .~ Just (\x -> do
+                  let payload = encodeToLazyText x :: LText
+                  atomically $ writeTChan chan $ Just (toStrict payload)
+                  return ()
+                  )
   _ <- atomically $ writeTChan chan $ Just "Starting Search..."
-  _ <- runSpider siteSearchSpider
-      { _startUrl = (ScrapedPage 1 "START", uri)
-      , _extract = parse depth patterns crawlHostURI
-      , _load = Just (\x -> do
-              let payload = encodeToLazyText x :: LText
-              atomically $ writeTChan chan $ Just (toStrict payload)
-              return ()
-              )
-      }
+  _ <- runSpider spider
   _ <- atomically $ writeTChan chan Nothing
   return ()
 
@@ -141,7 +146,7 @@ parse maxDepth patterns crawlHostURI (ScrapedPage depth ref) resp = let
   nextDepth = succ depth
   tagTree = parseTagTree resp
   links = parseLinks crawlHostURI tagTree
-  responsePath = pack $ URI.uriPath $ responseUri resp
+  responsePath = resp ^. uri & URI.uriPath & pack
   reqs = catMaybes $ mkRequest <$> map (pack . show) links
   results = map (\r->Request (ScrapedPage nextDepth responsePath, r)) reqs
   items = map Item $ mapMaybe (performPatternMatch resp responsePath depth ref) patterns

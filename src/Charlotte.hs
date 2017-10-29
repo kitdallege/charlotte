@@ -17,8 +17,15 @@ Here is a longer description of this module, containing some
 commentary with @some markup@.
 -}
 module Charlotte (
-      module Charlotte.Types
+      module Charlotte.Lens
+    , SpiderDefinition(SpiderDefinition)
+    , CharlotteResponse
+    , responseBody
+    , CharlotteRequest
+    , mkRequest
+    , Result(..)
     , runSpider
+    , defaultSpider
     ) where
 import ClassyPrelude
 -- import           Prelude                    (Bool (..), Double, Either (..), IO,
@@ -49,8 +56,9 @@ import qualified Network.HTTP.Client        as C
 import           Network.HTTP.Client.TLS    (tlsManagerSettings)
 import           Network.HTTP.Types         as NT
 import qualified Network.URI                as URI
-
+import Lens.Micro.Platform
 import           Charlotte.Types
+import           Charlotte.Lens
 
 
 ------ new stuff -----------
@@ -59,26 +67,26 @@ log' :: (MonadIO m) => Text -> m ()
 log' str = liftIO $ putStrLn str
 
 pipeline :: JobQueue [b] -> (b -> IO b) -> (b -> IO ()) -> IO ()
-pipeline inBox transform load = forever loop
+pipeline inBox transformFn loadFn = forever loop
   where
     loop = do
       log' "== pipeline get items =="
       items <- atomically $ readJobQueue inBox
       log' "pipeline got items"
-      items' <- mapM transform items
+      items' <- mapM transformFn items
       log' "pipeline transformed items"
-      E.catch (mapM_ load items') (print :: E.SomeException -> IO())
+      E.catch (mapM_ loadFn items') (print :: E.SomeException -> IO())
       _ <- atomically $ taskCompleteJobQueue inBox
       log' "== pipeline loaded items =="
 
 workerWrapper :: Show a =>
   C.Manager ->
   JobQueue (a, CharlotteRequest) ->
-  JobQueue [b1] ->
-  (a -> CharlotteResponse -> [Result a b1]) ->
+  JobQueue [b] ->
+  (a -> CharlotteResponse -> [Result a b]) ->
   TVar (Set ByteString) ->
-  IO b
-workerWrapper manager inBox outBox extract seen = forever loop
+  IO c
+workerWrapper manager inBox outBox extractFn seen = forever loop
   where
     loop = do
       log' "workerWrapper: reading req from inbox"
@@ -90,7 +98,7 @@ workerWrapper manager inBox outBox extract seen = forever loop
           log' $ "workerWrapper: download error: " <> str
           atomically $ taskCompleteJobQueue inBox
         Right resp' -> do
-          let results = extract (fst req) resp'
+          let results = extractFn (fst req) resp'
               reqs = mapMaybe resultGetRequest $ filter resultIsRequest results
               items = mapMaybe resultGetItem $ filter resultIsItem results
           log' "workerWrapper: writing response to outBox"
@@ -105,13 +113,13 @@ workerWrapper manager inBox outBox extract seen = forever loop
 
 makeRequest' :: C.Manager -> TVar (Set ByteString) -> CharlotteRequest -> IO (Either Text CharlotteResponse)
 makeRequest' manager seen req = do
-  let req' = requestInternalRequest req
-      uri = fromString $ URI.uriPath $ requestUri req
+  let req' = req ^. internalRequest
+      uri' = fromString $ URI.uriPath $ view uri req
   seen' <- atomically $ readTVar seen
-  let duplicate = member uri seen'
+  let duplicate = member uri' seen'
   if not duplicate then do
-    atomically $ writeTVar seen (insertSet uri seen')
-    log' $ pack $ "makeRequest: Requesting: " <> show (requestUri req)
+    atomically $ writeTVar seen (insertSet uri' seen')
+    log' $ pack $ "makeRequest: Requesting: " <> show (view uri req)
     resp <- E.try $ C.withResponseHistory req' manager $ \hr -> do
         let orginhost = C.host req'
             finalReq = C.hrFinalRequest hr
@@ -126,13 +134,13 @@ makeRequest' manager seen req = do
             "The response host does not match that of the request's."
         bss <- C.brConsume $ C.responseBody res
         return res { C.responseBody = fromChunks bss }
-    log' $ pack $ (if isRight resp then "makeRequest: Success " else "makeRequest: Error ") <> show (requestUri req)
+    log' $ pack $ (if isRight resp then "makeRequest: Success " else "makeRequest: Error ") <> show (view uri req)
     case resp of
       Left e -> return $ Left $ pack $ show  (e :: C.HttpException)
       Right r ->
         let code = NT.statusCode (C.responseStatus r) in
           if 200 <= code && code < 300 then
-            return (Right $ mkResponse (requestUri req) req r)
+            return (Right $ mkResponse (view uri req) req r)
             else
               return $ Left $ pack ("StatusCodeException: code=" <> show code <> " returned.")
     else
@@ -142,11 +150,11 @@ runSpider :: (Show f, Show b) => SpiderDefinition f b -> IO ()
 runSpider spiderDef = do
   startTime <- getZonedTime
   putStrLn $ pack $ "============ START " <> show startTime <> " ============"
-  let startReq = mkRequest <$> _startUrl spiderDef
-      extract = _extract spiderDef
-      transform = fromMaybe return $ _transform spiderDef
-      load = fromMaybe (const (return ())) $ _load spiderDef
-
+  let
+      startReq = spiderDef ^. startUrl & _2 %~ mkRequest
+      extractFn = spiderDef ^. extract
+      transformFn = fromMaybe return $ spiderDef ^. transform
+      loadFn = fromMaybe (const (return ())) $ spiderDef ^. load
   -- bail if there is nothing to do.
   when (any isNothing startReq) (return ())
   let startReq' = fromJust <$> startReq
@@ -164,9 +172,9 @@ runSpider spiderDef = do
     }
   }
   -- {C.managerResponseTimeout = C.responseTimeoutMicro 60000000}
-  replicateM_ 3 . forkIO $ workerWrapper manager workerInBox workerOutBox extract seen
+  replicateM_ 3 . forkIO $ workerWrapper manager workerInBox workerOutBox extractFn seen
   -- Spin up Pipeline worker thread
-  void (forkIO $ pipeline workerOutBox transform load)
+  void (forkIO $ pipeline workerOutBox transformFn loadFn)
   -- populate Queue with the first item.
   threadDelay 20000
   atomically $ writeJobQueue workerInBox startReq'

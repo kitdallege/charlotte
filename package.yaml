@@ -19,6 +19,8 @@ library:
   - http-client
   - http-client-tls
   - http-types
+  - microlens-platform
+  - monad-logger
   - network-uri
   - stm
   - time
@@ -41,6 +43,8 @@ executables:
     - bytestring
     - binary
     - containers
+    - microlens-platform
+    - monad-logger
     - network-uri
     - stm
     - sqlite-simple

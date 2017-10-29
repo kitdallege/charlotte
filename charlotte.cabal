@@ -27,6 +27,8 @@ library
       src
   exposed-modules:
       Charlotte
+      Charlotte.Lens
+      Charlotte.Settings
       Charlotte.Types
   build-depends:
       base >=4.7 && <5
@@ -36,6 +38,8 @@ library
     , http-client
     , http-client-tls
     , http-types
+    , microlens-platform
+    , monad-logger
     , network-uri
     , stm
     , time
@@ -56,6 +60,8 @@ executable charlotte-exe
     , bytestring
     , binary
     , containers
+    , microlens-platform
+    , monad-logger
     , network-uri
     , stm
     , sqlite-simple
