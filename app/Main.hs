@@ -95,17 +95,10 @@ instance ToJSON MatchInfo where
 siteSearchSpider :: SpiderDefinition PageType Match
 siteSearchSpider = let
   Just crawlHostURI = URI.parseURI "http://local.lasvegassun.com"
-  in defaultSpider (ScrapedPage 1 "START")
-            & name .~ "wfind-spider"
-            & startUrl .~ (ScrapedPage 1 "START", "http://local.lasvegassun.com")
-            & extract .~ parse 0 [] crawlHostURI
-  -- in SpiderDefinition {}
-  --  name = "wfind-spider"
-  -- , _startUrl = (ScrapedPage 1 "START", "http://local.lasvegassun.com")
-  -- , _extract = parse 0 [] crawlHostURI
-  -- , _transform = Nothing
-  -- , _load = Nothing
-  -- }
+  in defaultSpider (ScrapedPage 0 mempty)
+        & name .~ "wfind-spider"
+        & startUrl .~ (ScrapedPage 1 "START", "http://local.lasvegassun.com")
+        & extract .~ parse 0 [] crawlHostURI
 
 main :: IO ()
 main = do
@@ -128,14 +121,14 @@ wfind uri' depth patterns chan = do
   hSetBuffering stdout LineBuffering
   let suri = unpack uri'
       Just crawlHostURI = URI.parseURI suri
-      spider = siteSearchSpider
+      spider = defaultSpider (ScrapedPage 0 mempty)
+            & name .~ "wfind-spider"
             & startUrl .~ (ScrapedPage 1 "START", uri')
             & extract .~ parse depth patterns crawlHostURI
             & load .~ Just (\x -> do
-                  let payload = encodeToLazyText x :: LText
-                  atomically $ writeTChan chan $ Just (toStrict payload)
-                  return ()
-                  )
+                let payload = encodeToLazyText x :: LText
+                atomically $ writeTChan chan $ Just (toStrict payload)
+                return ())
   _ <- atomically $ writeTChan chan $ Just "Starting Search..."
   _ <- runSpider spider
   _ <- atomically $ writeTChan chan Nothing
